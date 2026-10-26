@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Threading",
+  "version": "0.1.0",
+  "identifier": "com.threading.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "label": "main",
+      "dragDropEnabled": false,
+      "title": "Threading",
+      "width": 1360,
+      "height": 880,
+      "minWidth": 960,
+      "minHeight": 640,
+      "center": true,
+      "decorations": false,
+      "shadow": false,
+      "transparent": true
+    }],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Productivity",
+    "license": "MIT",
+    "shortDescription": "策略线管理",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico", "icons/icon.icns"],
+    "windows": { "nsis": { "displayLanguageSelector": false, "languages": ["SimpChinese", "English"] } }
+  }
+}
