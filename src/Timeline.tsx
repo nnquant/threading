@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { ArrowRight, FilePenLine, Maximize2, Pencil, Trash2 } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { ArrowRight, ChevronDown, ChevronUp, FilePenLine, Maximize2, Pencil, Trash2 } from 'lucide-react';
 import { useApp } from './context';
-import { EVENT_LABEL, HEALTH_LABEL, HEALTHS, KIND_LABEL, eventValue, fullTime, relativeTime } from './labels';
+import { EVENT_LABEL, HEALTH_LABEL, HEALTHS, KIND_LABEL, eventValue, fullTime, relativeTime, titleOf } from './labels';
 import { AutoTextarea, HealthDot, Markdown, Segmented } from './ui';
 import type { Writable } from './tabs';
 import type { Entry, Health, Id } from './types';
@@ -57,6 +57,46 @@ export function Composer({ projectId, threadId = null, compact = false }: { proj
   );
 }
 
+// A record taller than this starts folded (to the height in .entry-fold.is-folded), so one long note does not push the rest of
+// the timeline away; a little over that height is shown whole, since folding it would hide only a few lines.
+const FOLD_OVER = 340;
+
+/** The body of a record (without the title, which its head shows), folded when long. */
+function EntryBody({ entry, text }: { entry: Entry; text: string }) {
+  const { openRecord } = useApp();
+  const fold = useRef<HTMLDivElement>(null);
+  const clip = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(false);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    // The clip is what gets folded; the rendered Markdown inside keeps its full height.
+    const element = clip.current?.firstElementChild as HTMLElement | null | undefined;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    // Images and formulas load late and the panel can be resized, so the height is watched rather than read once.
+    const observer = new ResizeObserver(() => setLong(element.offsetHeight > FOLD_OVER));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const toggle = () => {
+    setOpen(!open);
+    // Folding a long record back from its end would leave the view far below it.
+    if (open) requestAnimationFrame(() => fold.current?.closest('.entry')?.scrollIntoView?.({ block: 'nearest' }));
+  };
+  return (
+    <div ref={fold} className={`entry-fold ${long && !open ? 'is-folded' : ''}`}>
+      <div ref={clip} className="entry-clip"><Markdown text={text} className="entry-body" /></div>
+      {long && (
+        <div className="entry-more">
+          <button aria-expanded={open} onClick={toggle}>
+            {open ? <><ChevronUp size={13} />收起</> : <><ChevronDown size={13} />展开全文</>}
+          </button>
+          <button onClick={() => openRecord(entry.id)}><Maximize2 size={12} />在标签页中打开</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Timeline({ entries, showThread = false }: { entries: Entry[]; showThread?: boolean }) {
   const { run, now, index, openThread, confirm, openEditor } = useApp();
   const [editing, setEditing] = useState<Id | null>(null);
@@ -96,11 +136,14 @@ export function Timeline({ entries, showThread = false }: { entries: Entry[]; sh
             </li>
           );
         }
+        // A record whose first line is an H1 is titled by it: the title stands beside the kind, the body starts below it.
+        const { title, rest } = titleOf(entry.body);
         return (
           <li key={entry.id} className={`entry is-${entry.kind}`}>
             <i className={`knot ${entry.health ? `is-${entry.health}` : ''}`} aria-hidden="true" />
             <div className="entry-head">
               <strong>{KIND_LABEL[entry.kind]}</strong>
+              {title && <><i className="entry-sep" aria-hidden="true" /><span className="entry-title" title={title}>{title}</span></>}
               {entry.health && <span className={`health-label is-${entry.health}`}>{HEALTH_LABEL[entry.health]}</span>}
               {thread && <button className="entry-thread" onClick={() => openThread(thread.id)}>{thread.title}</button>}
               {time}
@@ -138,7 +181,7 @@ export function Timeline({ entries, showThread = false }: { entries: Entry[]; sh
                   </div>
                 </div>
               )
-              : <Markdown text={entry.body} className="entry-body" />}
+              : <EntryBody entry={entry} text={rest} />}
           </li>
         );
       })}

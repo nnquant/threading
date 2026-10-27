@@ -1,7 +1,7 @@
 // Interface tests run against the browser preview store, which follows the same contract as the Rust backend.
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../src/App';
 
 // The record editor measures text ranges to keep the cursor in view; jsdom has no layout, so ranges get empty boxes.
@@ -10,7 +10,7 @@ Range.prototype.getBoundingClientRect = () => noBox;
 Range.prototype.getClientRects = () => Object.assign([], { item: () => null }) as unknown as DOMRectList;
 
 beforeEach(() => localStorage.clear());
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 async function start() {
   const user = userEvent.setup();
@@ -141,6 +141,35 @@ describe('Threading', () => {
     await waitFor(() => expect(doc.querySelector('[data-type="inline-math"]')?.getAttribute('data-latex')).toBe('R \\times 365'));
     await user.click(screen.getByRole('button', { name: '记录笔记' }));
     await waitFor(() => expect(tex()).toEqual(['R \\times 365', 'B_t = P_t - S_t']));
+  });
+
+  it('folds a long record and opens it in a tab of its own to read', async () => {
+    // jsdom has no layout: every record measures tall, and the observer reports at once.
+    vi.stubGlobal('ResizeObserver', class { constructor(private report: () => void) {} observe() { this.report(); } disconnect() {} });
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(1000);
+    const user = await start();
+    await user.click(within(section('停滞')).getByText('基差动量'));
+    const panel = await screen.findByRole('complementary', { name: '策略线：基差动量' });
+    await user.click(within(panel).getByRole('textbox', { name: '记录内容' }));
+    await user.paste('# 南华指数对比\n\n换用现货指数后夏普更稳');
+    await user.click(within(panel).getByRole('button', { name: '记录笔记' }));
+    expect((await within(panel).findAllByRole('button', { name: '展开全文' })).length).toBeGreaterThan(0);
+    // The H1 on its first line is the record's title, shown beside the kind rather than in the body.
+    const title = within(panel).getByText('南华指数对比');
+    expect(title.closest('.entry-head')?.textContent).toMatch(/^笔记南华指数对比/);
+    expect(within(title.closest('li')!).queryByRole('heading', { name: '南华指数对比' })).toBeNull();
+    await user.click((await within(panel).findAllByRole('button', { name: '在标签页中打开' }))[0]);
+    const tabs = screen.getByRole('tablist', { name: '标签页' });
+    // The tab is named after the record's first line.
+    expect(await within(tabs).findByRole('tab', { name: '南华指数对比', selected: true })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '基差动量', level: 1 })).toBeTruthy();
+    expect(within(screen.getByRole('article')).getByText('换用现货指数后夏普更稳')).toBeTruthy();
+    // Editing it goes through the editor; closing the record returns to where it was opened.
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    expect(await within(tabs).findByRole('tab', { name: '编辑笔记：南华指数对比', selected: true })).toBeTruthy();
+    await user.click(within(tabs).getByRole('tab', { name: '南华指数对比' }));
+    await user.click(within(tabs).getByRole('button', { name: '关闭 南华指数对比' }));
+    expect(within(tabs).getByRole('tab', { name: '焦点', selected: true })).toBeTruthy();
   });
 
   it('asks before deleting a thread', async () => {

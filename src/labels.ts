@@ -94,3 +94,30 @@ export function longToday(now = Date.now()) {
   const date = new Date(now);
   return `${date.getMonth() + 1}月${date.getDate()}日 ${WEEKDAYS[date.getDay()]}`;
 }
+
+/** One line of Markdown as plain text: block markers, links, emphasis and escapes dropped. */
+export function plainLine(line: string) {
+  return line
+    .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\\(?=[^\sA-Za-z])/g, '')
+    .replace(/\*\*|__|~~|`/g, '')
+    .trim();
+}
+
+const H1 = /^#[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/;
+
+/** A record titles itself the Markdown way: an H1 on its first line is the title, and `rest` is the body under it. */
+export function titleOf(body: string): { title: string | null; rest: string } {
+  const lines = body.split('\n');
+  const first = lines.findIndex(line => line.trim());
+  const heading = first < 0 ? null : H1.exec(lines[first]);
+  const title = heading && plainLine(heading[1]);
+  if (!title) return { title: null, rest: body };
+  return { title, rest: lines.slice(first + 1).join('\n').replace(/^\s*\n/, '') };
+}
+
+/** A record in one line: its title, or else its first paragraph as plain text. */
+export function gist(body: string) {
+  return titleOf(body).title ?? (body.trim().split(/\n\s*\n/)[0] ?? '').split('\n').map(plainLine).join(' ').trim();
+}

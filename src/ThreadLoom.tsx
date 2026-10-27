@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useApp } from './context';
-import { DAY, KIND_LABEL, STAGE_LABEL, STATE_LABEL, addDays, daysSince, dueLabel, fullTime, parseIso, shortDate, todayIso, waitedLabel } from './labels';
+import { DAY, KIND_LABEL, STAGE_LABEL, STATE_LABEL, addDays, daysSince, dueLabel, fullTime, gist, parseIso, shortDate, todayIso, waitedLabel } from './labels';
 import { EmptyState, OrgMark, PriorityIcon, StageLabel, TreeLead, TreePath, fitText, textWidth, treeStep } from './ui';
 import { ancestorsOf, isOpen, isStale, nextTodo, threadSpans, threadTree, type TreeRow } from './workspace';
 import { STAGES, type Id, type IsoDate, type Millis, type Project, type Stage, type Thread } from './types';
@@ -370,7 +370,7 @@ function LoomRow({ row, nested, branch, scale, ticks, now, target, selected, onO
         ))}
         {(entries ?? []).filter(entry => entry.kind !== 'event' && entry.kind !== 'update' && within(entry.createdAt)).map(entry => {
           const cx = x(entry.createdAt);
-          const tip = <title>{`${KIND_LABEL[entry.kind]}，${fullTime(entry.createdAt)}\n${entry.body.split('\n')[0].slice(0, 80)}`}</title>;
+          const tip = <title>{`${KIND_LABEL[entry.kind]}，${fullTime(entry.createdAt)}\n${gist(entry.body).slice(0, 80)}`}</title>;
           return entry.kind === 'decision'
             ? <rect key={entry.id} className="loom-mark is-decision" x={cx - 3.2} y={LINE - 3.2} width={6.4} height={6.4} transform={`rotate(45 ${cx} ${LINE})`}>{tip}</rect>
             : <circle key={entry.id} className={`loom-mark is-${entry.kind}`} cx={cx} cy={LINE} r={entry.kind === 'result' ? 4 : 3.5}>{tip}</circle>;

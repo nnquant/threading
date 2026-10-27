@@ -17,8 +17,14 @@ export type Tab =
   | { id: 'home'; kind: 'home'; view: HomeView; selected: Id | null }
   | { id: string; kind: 'project'; projectId: Id; selected: Id | null }
   /** `from` is the tab to return to once the record is saved; `inbox` is text waiting to be added to the open editor. */
-  | { id: string; kind: 'editor'; draft: Draft; from?: string; inbox?: { text: string; at: number } };
+  | { id: string; kind: 'editor'; draft: Draft; from?: string; inbox?: { text: string; at: number } }
+  /** A record to read on its own; `from` is the tab to return to once it is closed. */
+  | { id: string; kind: 'record'; entryId: Id; from?: string };
 export type EditorTab = Extract<Tab, { kind: 'editor' }>;
+export type RecordTab = Extract<Tab, { kind: 'record' }>;
+/** The tabs that list lines and open one in a side panel. */
+export type PanelTab = Extract<Tab, { kind: 'home' | 'project' }>;
+export const hasPanel = (tab: Tab): tab is PanelTab => tab.kind === 'home' || tab.kind === 'project';
 
 export interface Tabs { tabs: Tab[]; active: string }
 
@@ -34,7 +40,8 @@ export function readTabs(): Tabs {
     if (saved && Array.isArray(saved.tabs)) {
       const home = saved.tabs.find(tab => tab?.kind === 'home') as Extract<Tab, { kind: 'home' }> | undefined;
       const rest = saved.tabs.filter(tab => (tab?.kind === 'project' && typeof tab.projectId === 'string')
-        || (tab?.kind === 'editor' && typeof tab.draft?.projectId === 'string'));
+        || (tab?.kind === 'editor' && typeof tab.draft?.projectId === 'string')
+        || (tab?.kind === 'record' && typeof tab.entryId === 'string'));
       const tabs: Tab[] = [
         home && HOME_VIEWS.includes(home.view?.kind) ? { ...HOME, view: home.view, selected: home.selected ?? null } : HOME,
         ...rest.map(tab => tab.kind === 'project' ? { ...tab, selected: tab.selected ?? null } : tab),

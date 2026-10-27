@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { CalendarClock, CircleAlert, CircleDashed, Flag, Hourglass, Plus, Snail } from 'lucide-react';
 import { useApp } from './context';
-import { HEALTH_LABEL, daysSince, dueLabel, longToday, relativeTime, todayIso, waitedLabel } from './labels';
+import { HEALTH_LABEL, daysSince, dueLabel, gist, longToday, relativeTime, todayIso, waitedLabel } from './labels';
 import { EmptyState, HealthDot, OrgMark, PriorityIcon } from './ui';
 import { parentOf, type Focus } from './workspace';
 import type { Thread } from './types';
@@ -158,7 +158,7 @@ export default function FocusView({ focus }: { focus: Focus }) {
                   <span className="focus-text truncate">{project.name}</span>
                   <span className="focus-context truncate">
                     {org && <span className="focus-where"><OrgMark org={org} />{org.code}</span>}
-                    {update ? `${relativeTime(update.createdAt, now)}：${update.body.split('\n')[0]}` : '还没有写过项目进展'}
+                    {update ? `${relativeTime(update.createdAt, now)}：${gist(update.body)}` : '还没有写过项目进展'}
                   </span>
                 </button>
                 <span className={`focus-meta health-label is-${project.health}`}>{HEALTH_LABEL[project.health]}</span>

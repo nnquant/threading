@@ -4,8 +4,8 @@ import type { Draft, EditorTab, HomeView } from './tabs';
 import type { Index } from './workspace';
 import type { Change, Id, Stage, Workspace } from './types';
 
-/** Where a tab is: the home tab's views, a project tab, or an editor tab (by tab id). */
-export type View = HomeView | { kind: 'project'; id: Id } | { kind: 'editor'; id: string };
+/** Where a tab is: the home tab's views, a project tab, or an editor or record tab (by tab id). */
+export type View = HomeView | { kind: 'project'; id: Id } | { kind: 'editor'; id: string } | { kind: 'record'; id: string };
 
 /** Defaults for the new-thread dialog; `parentId` makes it a sub-line. */
 export interface NewThreadPreset { projectId?: Id; parentId?: Id; stage?: Stage }
@@ -29,6 +29,8 @@ export interface AppContext {
   /** Opens the record editor in a tab of its own, or brings back the one already open for the same record; `body` is added to it. */
   openEditor: (draft: Draft, body?: string) => void;
   patchDraft: (tabId: string, patch: Partial<Draft>) => void;
+  /** Opens a record to read in a tab of its own, or the tab already showing it. */
+  openRecord: (entryId: Id) => void;
   /** The editor took the text waiting in its inbox. */
   clearInbox: (tabId: string) => void;
   showTab: (id: string) => void;

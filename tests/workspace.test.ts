@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dayDiff, daysSince, dueLabel, targetLabel, todayIso } from '../src/labels';
+import { dayDiff, daysSince, dueLabel, gist, targetLabel, titleOf, todayIso } from '../src/labels';
 import { seedWorkspace } from '../src/demo';
 import { loomScale, loomTicks } from '../src/ThreadLoom';
 import { ancestorsOf, applyChange, buildIndex, compareThreads, descendantsOf, focusOf, matchesThread, reviewQueue, threadSpans, threadTree } from '../src/workspace';
@@ -204,5 +204,19 @@ describe('date labels', () => {
     expect(dueLabel('2026-11-30', NOW)).toBe('11月30日');
     expect(targetLabel('2026-11-30', NOW)).toBe('11月30日，还有 35 天');
     expect(targetLabel('2026-10-20', NOW)).toBe('10月20日，已过 6 天');
+  });
+});
+
+describe('record titles', () => {
+  it('takes an H1 on the first line as the title', () => {
+    expect(titleOf('\n# 币圈套利指南\n\n## 第一节\n正文')).toEqual({ title: '币圈套利指南', rest: '## 第一节\n正文' });
+    expect(titleOf('# **调研** [币安](https://binance.com) 合约 #')).toEqual({ title: '调研 币安 合约', rest: '' });
+    expect(titleOf('## 只是二级标题\n正文').title).toBeNull();
+    expect(titleOf('前言\n# 后面的标题').title).toBeNull();
+  });
+
+  it('sums a record up by its title, or else its first paragraph', () => {
+    expect(gist('# 南华指数对比\n\n换用现货指数')).toBe('南华指数对比');
+    expect(gist('- 实盘超额回撤\n- 客户已在问\n\n下一段')).toBe('实盘超额回撤 客户已在问');
   });
 });

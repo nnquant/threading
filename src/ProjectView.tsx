@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { CalendarDays, ChevronRight, MessageSquarePlus, Pencil, Plus } from 'lucide-react';
 import { useApp } from './context';
 import HillChart from './HillChart';
-import { HEALTHS, HEALTH_LABEL, STATUSES, STATUS_LABEL, dayDiff, parseIso, relativeTime, shortDate, todayIso } from './labels';
+import { HEALTHS, HEALTH_LABEL, STATUSES, STATUS_LABEL, dayDiff, gist, parseIso, relativeTime, shortDate, todayIso } from './labels';
 import ThreadsView from './ThreadsView';
 import { Composer, Timeline } from './Timeline';
 import { Dropdown, HealthDot, Markdown, OrgMark } from './ui';
@@ -10,11 +10,6 @@ import type { Id, IsoDate, Millis, Project } from './types';
 
 type Tab = 'threads' | 'hill' | 'activity';
 const TAB_KEY = 'threading.project.tab.v1';
-
-/** The first paragraph of a Markdown entry as one line of plain text. */
-const gist = (body: string) => (body.trim().split(/\n\s*\n/)[0] ?? '')
-  .split('\n').map(line => line.replace(/^\s*(?:#+|>|[-*+]|\d+\.)\s+(?:\[[ xX]\]\s+)?/, '')).join(' ')
-  .replace(/\*\*|__|`/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
 
 /** The target date, with how much of the project's time is used up: counted from the day it was created. */
 function TargetFact({ project, target, now, onEdit }: { project: Project; target: IsoDate; now: Millis; onEdit: () => void }) {

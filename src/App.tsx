@@ -10,7 +10,8 @@ import ProjectView from './ProjectView';
 import ReviewView from './ReviewView';
 import Sidebar from './Sidebar';
 import TabBar from './TabBar';
-import { dropDraft, newTabId, readDraft, readTabs, sameTarget, saveTabs, writeDraft, type Draft, type EditorTab, type Tab, type Tabs } from './tabs';
+import RecordView from './RecordView';
+import { dropDraft, hasPanel, newTabId, readDraft, readTabs, sameTarget, saveTabs, writeDraft, type Draft, type EditorTab, type PanelTab, type Tab, type Tabs } from './tabs';
 import ThreadPanel from './ThreadPanel';
 import ThreadsView from './ThreadsView';
 import { applyChange, buildIndex, focusOf, reviewQueue } from './workspace';
@@ -30,8 +31,8 @@ type DialogState =
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 const isWindowChrome = (target: EventTarget) => !(target instanceof Element && target.closest('button, input, select, a, [role="dialog"]'));
 const isTyping = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || !!target.closest('input, textarea, select'));
-const viewOf = (tab: Tab): View => tab.kind === 'home' ? tab.view : tab.kind === 'project' ? { kind: 'project', id: tab.projectId } : { kind: 'editor', id: tab.id };
-const withSelected = (tab: Tab, id: Id | null): Tab => tab.kind === 'editor' ? tab : { ...tab, selected: id };
+const viewOf = (tab: Tab): View => tab.kind === 'home' ? tab.view : tab.kind === 'project' ? { kind: 'project', id: tab.projectId } : { kind: tab.kind, id: tab.id };
+const withSelected = (tab: Tab, id: Id | null): Tab => hasPanel(tab) ? { ...tab, selected: id } : tab;
 
 export default function App() {
   const [api, setApi] = useState<Api | null>(null);
@@ -78,19 +79,19 @@ export default function App() {
   const focus = useMemo(() => workspace && index && focusOf(workspace, index, now), [workspace, index, now]);
   const reviewCount = useMemo(() => workspace && index ? reviewQueue(workspace, index, now).length : 0, [workspace, index, now]);
 
-  // Tabs: the home tab shows focus, all lines, review and organizations; each project and each draft gets a tab of its own.
+  // Tabs: the home tab shows focus, all lines, review and organizations; each project, draft and record read on its own gets a tab.
   const tabsRef = useRef(tabState);
   tabsRef.current = tabState;
   useEffect(() => saveTabs(tabState), [tabState]);
   const { tabs } = tabState;
   const current = tabs.find(tab => tab.id === tabState.active) ?? tabs[0];
   const view = viewOf(current);
-  const selected = current.kind === 'editor' ? null : current.selected;
+  const selected = hasPanel(current) ? current.selected : null;
   const editors = useMemo(() => tabs.filter((tab): tab is EditorTab => tab.kind === 'editor'), [tabs]);
 
   const showTab = useCallback((id: string) => setTabState(state => state.tabs.some(tab => tab.id === id) && state.active !== id ? { ...state, active: id } : state), []);
   const go = useCallback((next: View) => setTabState(state => {
-    if (next.kind === 'editor') return state.tabs.some(tab => tab.id === next.id) ? { ...state, active: next.id } : state;
+    if (next.kind === 'editor' || next.kind === 'record') return state.tabs.some(tab => tab.id === next.id) ? { ...state, active: next.id } : state;
     if (next.kind === 'project') {
       const open = state.tabs.find(tab => tab.kind === 'project' && tab.projectId === next.id);
       if (open) return { ...state, active: open.id };
@@ -104,8 +105,8 @@ export default function App() {
   })), []);
   const openThread = useCallback((id: Id | null) => {
     const here = tabsRef.current.tabs.find(tab => tab.id === tabsRef.current.active);
-    if (here && here.kind !== 'editor') { selectIn(here.id, id); return; }
-    // From an editor tab, a line opens in its project's tab.
+    if (here && hasPanel(here)) { selectIn(here.id, id); return; }
+    // From an editor or record tab, a line opens in its project's tab.
     const projectId = id ? index?.thread.get(id)?.projectId : undefined;
     if (!id || !projectId) return;
     setTabState(state => {
@@ -126,7 +127,7 @@ export default function App() {
         if (at < 0) return state;
         const rest = state.tabs.filter(row => row.id !== id);
         if (state.active !== id) return { ...state, tabs: rest };
-        const back = tab.kind === 'editor' && tab.from && rest.some(row => row.id === tab.from) ? tab.from : rest[Math.max(0, at - 1)].id;
+        const back = !hasPanel(tab) && tab.from && rest.some(row => row.id === tab.from) ? tab.from : rest[Math.max(0, at - 1)].id;
         return { tabs: rest, active: back };
       });
     };
@@ -154,6 +155,12 @@ export default function App() {
     writeDraft(id, text);
     setTabState(state => ({ tabs: [...state.tabs, { id, kind: 'editor', draft, from: state.active }], active: id }));
   }, [showTab]);
+  const openRecord = useCallback((entryId: Id) => setTabState(state => {
+    const open = state.tabs.find(tab => tab.kind === 'record' && tab.entryId === entryId);
+    if (open) return { ...state, active: open.id };
+    const tab: Tab = { id: newTabId(), kind: 'record', entryId, from: state.active };
+    return { tabs: [...state.tabs, tab], active: tab.id };
+  }), []);
   const patchDraft = useCallback((tabId: string, patch: Partial<Draft>) => setTabState(state => ({
     ...state, tabs: state.tabs.map(tab => tab.id === tabId && tab.kind === 'editor' ? { ...tab, draft: { ...tab.draft, ...patch } } : tab),
   })), []);
@@ -161,29 +168,31 @@ export default function App() {
     ? { ...state, tabs: state.tabs.map(tab => tab.id === tabId && tab.kind === 'editor' ? { ...tab, inbox: undefined } : tab) }
     : state), []);
 
-  // Close tabs whose project was deleted and panels whose line was; editor tabs stay so the text can still be copied.
+  // Close tabs whose project or record was deleted and panels whose line was; editor tabs stay so the text can still be copied.
   useEffect(() => {
-    if (!index) return;
+    if (!index || !workspace) return;
+    const entries = new Set(workspace.entries.map(entry => entry.id));
     setTabState(state => {
       let changed = false;
       const next = state.tabs.flatMap((tab): Tab[] => {
-        if (tab.kind === 'project' && !index.project.has(tab.projectId)) { changed = true; return []; }
+        if ((tab.kind === 'project' && !index.project.has(tab.projectId)) || (tab.kind === 'record' && !entries.has(tab.entryId))) { changed = true; return []; }
         let kept = tab;
         if (kept.kind === 'home' && kept.view.kind === 'org' && !index.org.has(kept.view.id)) { changed = true; kept = { ...kept, view: { kind: 'focus' } }; }
-        if (kept.kind !== 'editor' && kept.selected && !index.thread.has(kept.selected)) { changed = true; kept = withSelected(kept, null); }
+        if (hasPanel(kept) && kept.selected && !index.thread.has(kept.selected)) { changed = true; kept = withSelected(kept, null); }
         return [kept];
       });
       if (!changed) return state;
       return { tabs: next, active: next.some(tab => tab.id === state.active) ? state.active : 'home' };
     });
-  }, [index]);
+  }, [index, workspace]);
 
   const newThread = useCallback((preset: NewThreadPreset = {}) => {
     const fallback = view.kind === 'project' ? view.id
       : current.kind === 'editor' ? current.draft.projectId
-        : selected ? index?.thread.get(selected)?.projectId : undefined;
+        : current.kind === 'record' ? workspace?.entries.find(entry => entry.id === current.entryId)?.projectId
+          : selected ? index?.thread.get(selected)?.projectId : undefined;
     setDialog({ kind: 'thread', preset: { ...preset, projectId: preset.projectId ?? fallback } });
-  }, [view, current, selected, index]);
+  }, [view, current, selected, index, workspace]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -273,7 +282,7 @@ export default function App() {
 
   const context: AppContext | null = workspace && index && api ? {
     workspace, index, now, view, go, selected, api, run, notify, newThread, openThread,
-    editors, openEditor, patchDraft, clearInbox, showTab, closeTab,
+    editors, openEditor, patchDraft, clearInbox, openRecord, showTab, closeTab,
     newProject: orgId => setDialog({ kind: 'project', orgId }),
     editProject: id => setDialog({ kind: 'project', id }),
     newOrg: () => setDialog({ kind: 'org' }),
@@ -291,7 +300,7 @@ export default function App() {
   const activeProjects = workspace ? workspace.projects.filter(project => project.status === 'active').length : 0;
   const overLimit = !!focus && workspace!.settings.wipLimit > 0 && focus.activeCount > workspace!.settings.wipLimit;
 
-  const contentOf = (tab: Exclude<Tab, EditorTab>) => {
+  const contentOf = (tab: PanelTab) => {
     if (tab.kind === 'project') return <ProjectView key={tab.projectId} id={tab.projectId} />;
     const { view: shown } = tab;
     if (shown.kind === 'focus') return <FocusView focus={focus!} />;
@@ -320,8 +329,8 @@ export default function App() {
         {context
           ? <Ctx.Provider value={context}><TabBar tabs={tabs} active={current.id} onSelect={showTab} onClose={closeTab} /></Ctx.Provider>
           : <div className="tabbar" />}
-        <button className="search-trigger" onClick={() => setPalette(true)} disabled={!context} aria-label="搜索或跳转" title="搜索或跳转（Ctrl+K）">
-          <Search size={13} /><span>搜索或跳转</span>
+        <button className="icon-btn search-trigger" onClick={() => setPalette(true)} disabled={!context} aria-label="搜索或跳转" title="搜索或跳转（Ctrl+K）">
+          <Search size={15} />
         </button>
         <div className="titlebar-actions">
           <button className="btn btn-primary" onClick={() => newThread()} disabled={!context}><Plus size={14} />新建策略线</button>
@@ -353,14 +362,14 @@ export default function App() {
               {tabs.map(tab => {
                 const shown = tab === current;
                 // Every tab keeps its own view state and side panel; hidden tabs stay mounted so scroll and drafts survive.
-                const paneSelected = tab.kind === 'editor' ? null : tab.selected;
-                const scope: AppContext = { ...context, view: viewOf(tab), selected: paneSelected, openThread: tab.kind === 'editor' ? openThread : id => selectIn(tab.id, id) };
+                const paneSelected = hasPanel(tab) ? tab.selected : null;
+                const scope: AppContext = { ...context, view: viewOf(tab), selected: paneSelected, openThread: hasPanel(tab) ? id => selectIn(tab.id, id) : openThread };
                 return (
                   <Ctx.Provider key={tab.id} value={scope}>
                     <section className={`pane ${paneSelected ? 'has-panel' : ''}`} hidden={!shown} data-tab={tab.kind}>
                       {tab.kind === 'editor'
                         ? <Suspense fallback={<div className="loading"><LoaderCircle size={18} className="spin" /></div>}><EditorView tab={tab} active={shown} /></Suspense>
-                        : (
+                        : tab.kind === 'record' ? <RecordView tab={tab} /> : (
                           <>
                             <main className="main">{contentOf(tab)}</main>
                             {paneSelected && <ThreadPanel key={paneSelected} id={paneSelected} onClose={() => selectIn(tab.id, null)} />}

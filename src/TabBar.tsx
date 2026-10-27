@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Crosshair, FilePenLine, ListTree, RotateCcw, X } from 'lucide-react';
+import { Crosshair, FilePenLine, FileText, ListTree, RotateCcw, X } from 'lucide-react';
 import { useApp } from './context';
-import { KIND_LABEL } from './labels';
+import { KIND_LABEL, gist, titleOf } from './labels';
 import type { Tab } from './tabs';
 import { HealthDot, OrgMark } from './ui';
 
@@ -13,10 +13,18 @@ export function useTabLabel() {
       const project = index.project.get(tab.projectId);
       return { icon: project ? <HealthDot health={project.health} decorative /> : null, label: project?.name ?? '已删除的项目' };
     }
+    if (tab.kind === 'record') {
+      const entry = workspace.entries.find(row => row.id === tab.entryId);
+      const where = entry && ((entry.threadId ? index.thread.get(entry.threadId)?.title : index.project.get(entry.projectId)?.name) ?? '已删除');
+      // Named by its title, or else by how it begins.
+      return { icon: <FileText size={13} />, label: entry ? gist(entry.body) || `${KIND_LABEL[entry.kind]}：${where}` : '已删除的记录' };
+    }
     if (tab.kind === 'editor') {
       const { draft } = tab;
-      const where = (draft.threadId ? index.thread.get(draft.threadId)?.title : index.project.get(draft.projectId)?.name) ?? '已删除';
-      const kind = draft.entryId ? `编辑${KIND_LABEL[workspace.entries.find(entry => entry.id === draft.entryId)?.kind ?? draft.kind]}` : KIND_LABEL[draft.kind];
+      const entry = draft.entryId ? workspace.entries.find(row => row.id === draft.entryId) : undefined;
+      const where = (entry && titleOf(entry.body).title)
+        ?? (draft.threadId ? index.thread.get(draft.threadId)?.title : index.project.get(draft.projectId)?.name) ?? '已删除';
+      const kind = draft.entryId ? `编辑${KIND_LABEL[entry?.kind ?? draft.kind]}` : KIND_LABEL[draft.kind];
       return { icon: <FilePenLine size={13} />, label: `${kind}：${where}` };
     }
     const { view } = tab;
