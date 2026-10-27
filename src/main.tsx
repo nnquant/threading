@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import '@fontsource-variable/noto-sans';
 import '@fontsource-variable/noto-sans-sc';
 import '@fontsource-variable/noto-sans-mono';
+import 'katex/dist/katex.min.css';
 import App from './App';
 import './App.css';
 

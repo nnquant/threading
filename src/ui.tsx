@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type TextareaHTMLAttributes } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type TextareaHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { Check, ChevronDown, ChevronRight, CircleCheck, Hourglass, ImageOff, Pause, X } from 'lucide-react';
 import { desktop } from './bridge';
 import { useApp } from './context';
 import { ATTACHMENT, imageUrl } from './images';
+import { KATEX_OPTIONS, normalizeMath } from './math';
 import { HEALTH_LABEL, ORG_COLOR, PRIORITY_LABEL, STAGE_LABEL, STATE_LABEL } from './labels';
 import type { TreeRow } from './workspace';
 import { STAGES, type Health, type Id, type Organization, type Priority, type Stage, type Thread, type ThreadState } from './types';
@@ -242,12 +245,17 @@ function MarkdownImage({ src = '', alt = '' }: { src?: string; alt?: string }) {
 /** Lets saved-image references through; everything else gets react-markdown's safe-URL check. */
 const urlTransform = (url: string) => url.startsWith(ATTACHMENT) ? url : defaultUrlTransform(url);
 
-/** Markdown with GFM; links open in the system browser, images can be saved ones, and HTML is not rendered. */
+const REMARK = [remarkGfm, remarkMath];
+const REHYPE: NonNullable<Parameters<typeof ReactMarkdown>[0]['rehypePlugins']> = [[rehypeKatex, KATEX_OPTIONS]];
+
+/** Markdown with GFM and formulas; links open in the system browser, images can be saved ones, and HTML is not rendered. */
 export function Markdown({ text, className = '' }: { text: string; className?: string }) {
+  const source = useMemo(() => normalizeMath(text), [text]);
   return (
     <div className={`markdown ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={REMARK}
+        rehypePlugins={REHYPE}
         urlTransform={urlTransform}
         components={{
           a: ({ href, children }) => (
@@ -256,7 +264,7 @@ export function Markdown({ text, className = '' }: { text: string; className?: s
           img: ({ src, alt }) => <MarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} />,
         }}
       >
-        {text}
+        {source}
       </ReactMarkdown>
     </div>
   );

@@ -1,22 +1,26 @@
 // The record editor: a what-you-see-is-what-you-get Markdown document in its own tab.
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { EditorContent, Extension, useEditor, useEditorState, type Editor as Tiptap } from '@tiptap/react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { EditorContent, Extension, InputRule, useEditor, useEditorState, type Editor as Tiptap, type InputRuleMatch } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import Image from '@tiptap/extension-image';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TableKit } from '@tiptap/extension-table';
+import { BlockMath, InlineMath } from '@tiptap/extension-mathematics';
+import { Fragment, Slice, type Node as PMNode, type Schema } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
 import { Placeholder } from '@tiptap/extensions';
+import katex from 'katex';
 import {
   Bold, CircleAlert, Code, Heading1, Heading2, Heading3, ImagePlus, Italic, Link2, List, ListChecks, ListOrdered, Minus, Redo2,
-  SquareCode, Strikethrough, Table, TextQuote, Undo2,
+  Sigma, SquareCode, Strikethrough, Table, TextQuote, Undo2,
 } from 'lucide-react';
 import { useApp } from './context';
 import { ATTACHMENT, fileToBase64, imageUrl, isImageFile } from './images';
 import { HEALTHS, HEALTH_LABEL, KIND_LABEL } from './labels';
+import { KATEX_OPTIONS, normalizeMath } from './math';
 import { readDraft, writeDraft, type EditorTab, type Writable } from './tabs';
-import { HealthDot, OrgMark, Segmented, useDismiss } from './ui';
+import { AutoTextarea, HealthDot, OrgMark, Segmented, useDismiss } from './ui';
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -60,8 +64,8 @@ const normalizeUrl = (value: string) => {
   return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
 };
 
-/** A freshly inserted image is left selected, and the next insert would replace it: move on to the line after it. */
-function leaveImage(editor: Tiptap) {
+/** A freshly inserted image or formula is left selected, and the next insert would replace it: move on to the line after it. */
+function leaveNode(editor: Tiptap) {
   const { selection, doc } = editor.state;
   if (!(selection instanceof NodeSelection)) return;
   const after = selection.to;
@@ -101,6 +105,108 @@ const SavedImage = Image.extend<{ resolve: (src: string) => Promise<string> } & 
     };
   },
 });
+
+/** `$x^2$` typed in the text becomes a formula, as in other Markdown editors; a space just inside either dollar keeps prices as text. */
+export const findDollarMath = (text: string): InputRuleMatch | null => {
+  const match = /\$([^\s$](?:[^$]*[^\s$\\])?)\$$/.exec(text);
+  if (!match || /[$\\]/.test(text[match.index - 1] ?? '')) return null;
+  return { index: match.index, text: match[0], data: { latex: match[1] } };
+};
+
+const Formula = InlineMath.extend({
+  addInputRules() {
+    return [
+      ...(this.parent?.() ?? []),
+      new InputRule({
+        find: findDollarMath,
+        handler: ({ state, range, match }) => { state.tr.replaceWith(range.from, range.to, this.type.create({ latex: match.data?.latex })); },
+      }),
+    ];
+  },
+});
+
+/** Formulas copied from a rendered page keep their LaTeX in an annotation (KaTeX and MathML both do); paste that as `\(…\)` / `\[…\]`. */
+export function texFromHTML(html: string) {
+  if (!html.includes('application/x-tex')) return html;
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  // Outer elements come first; the formula inside one that was already replaced is detached and skipped.
+  for (const element of doc.body.querySelectorAll('.katex-display, .katex, math')) {
+    const tex = element.isConnected && element.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim();
+    if (!tex) continue;
+    if (element.classList.contains('katex-display') || element.getAttribute('display') === 'block') {
+      const line = doc.createElement('p');
+      line.textContent = `\\[${tex}\\]`;
+      element.replaceWith(line);
+    } else element.replaceWith(`\\(${tex}\\)`);
+  }
+  return doc.body.innerHTML;
+}
+
+const PASTED_INLINE = /\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\]|\$\$([^$]+?)\$\$|(^|[^$\\])\$(?=[^\s$])([^$\n]*?[^\s$\\])\$(?!\d)/g;
+const PASTED_DISPLAY = /^\s*(?:\\\[((?:(?!\\\])[\s\S])+)\\\]|\$\$([^$]+)\$\$)\s*$/;
+const OPENS_DISPLAY = /^\s*(\\\[|\$\$)\s*$/;
+
+/**
+ * Formulas pasted as text become formula nodes. A paragraph that is only `\[…\]` or `$$…$$`, or those delimiters on lines of
+ * their own around the LaTeX, becomes a display formula; `\(…\)`, `$…$` and the rest inside text become inline ones.
+ */
+export function pasteMath(slice: Slice, schema: Schema) {
+  const { inlineMath, blockMath, paragraph } = schema.nodes;
+  if (!inlineMath || !blockMath) return slice;
+  const inline = (node: PMNode): PMNode[] => {
+    if (node.isText) {
+      if (node.marks.some(mark => mark.type.spec.code)) return [node];
+      const text = node.text ?? '';
+      const parts: PMNode[] = [];
+      let last = 0;
+      for (const match of text.matchAll(PASTED_INLINE)) {
+        const latex = (match[1] ?? match[2] ?? match[3] ?? match[5]).trim();
+        if (!latex) continue;
+        const start = match.index + (match[4]?.length ?? 0);
+        if (start > last) parts.push(schema.text(text.slice(last, start), node.marks));
+        parts.push(inlineMath.create({ latex }));
+        last = match.index + match[0].length;
+      }
+      if (!parts.length) return [node];
+      if (last < text.length) parts.push(schema.text(text.slice(last), node.marks));
+      return parts;
+    }
+    if (node.isLeaf || node.type.spec.code) return [node];
+    const children: PMNode[] = [];
+    node.content.forEach(child => { children.push(...inline(child)); });
+    return [node.copy(Fragment.from(children))];
+  };
+  const lineOf = (node: PMNode) => node.textBetween(0, node.content.size, '\n', '\n');
+  const top = slice.content;
+  const nodes: PMNode[] = [];
+  let { openStart, openEnd } = slice;
+  for (let i = 0; i < top.childCount; i++) {
+    const node = top.child(i);
+    let latex: string | undefined;
+    let end = i;
+    if (node.type === paragraph) {
+      const whole = PASTED_DISPLAY.exec(lineOf(node));
+      latex = whole?.[1] ?? whole?.[2];
+      const opening = !whole && OPENS_DISPLAY.exec(lineOf(node))?.[1];
+      if (opening) {
+        const lines: string[] = [];
+        for (let j = i + 1; j < top.childCount && top.child(j).type === paragraph; j++) {
+          const line = lineOf(top.child(j)).trim();
+          if (line === (opening === '$$' ? '$$' : '\\]')) { latex = lines.join('\n'); end = j; break; }
+          lines.push(line);
+        }
+      }
+    }
+    if (latex?.trim()) {
+      nodes.push(blockMath.create({ latex: latex.trim() }));
+      // A formula has no inside to stay open into.
+      if (i === 0) openStart = 0;
+      if (end === top.childCount - 1) openEnd = 0;
+      i = end;
+    } else nodes.push(...inline(node));
+  }
+  return new Slice(Fragment.from(nodes), openStart, openEnd);
+}
 
 function Tool({ label, keys, active = false, disabled = false, onClick, children }: {
   label: string; keys?: string; active?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode;
@@ -155,7 +261,7 @@ function ImageForm({ editor, onPick, onClose }: { editor: Tiptap; onPick: () => 
   const [href, setHref] = useState('');
   const insert = () => {
     const url = normalizeUrl(href);
-    if (url) { editor.chain().focus().setImage({ src: url }).run(); leaveImage(editor); }
+    if (url) { editor.chain().focus().setImage({ src: url }).run(); leaveNode(editor); }
     onClose();
   };
   return (
@@ -177,6 +283,56 @@ function ImageForm({ editor, onPick, onClose }: { editor: Tiptap; onPick: () => 
   );
 }
 
+const FORMULAS = new Set(['inlineMath', 'blockMath']);
+
+function FormulaForm({ editor, onClose }: { editor: Tiptap; onClose: () => void }) {
+  // Opened on a formula it edits that one. Otherwise it inserts one: on a line of its own when the line is empty, starting from any
+  // selected text.
+  const [target] = useState(() => {
+    const { selection } = editor.state;
+    return selection instanceof NodeSelection && FORMULAS.has(selection.node.type.name) ? selection.node : null;
+  });
+  const [display] = useState(() => target ? target.type.name === 'blockMath' : !editor.state.selection.$from.parent.content.size);
+  const [latex, setLatex] = useState<string>(() => {
+    const { from, to } = editor.state.selection;
+    return target ? target.attrs.latex : editor.state.doc.textBetween(from, to, ' ');
+  });
+  // Rendered into the element rather than set as HTML: the desktop app's content policy blocks style attributes in parsed HTML.
+  const preview = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { if (preview.current) katex.render(latex, preview.current, { ...KATEX_OPTIONS, displayMode: display }); }, [latex, display]);
+  const apply = () => {
+    const value = latex.trim();
+    if (!value) return;
+    const chain = editor.chain().focus();
+    if (target) chain.updateAttributes(target.type.name, { latex: value }).run();
+    else { chain.insertContent({ type: display ? 'blockMath' : 'inlineMath', attrs: { latex: value } }).run(); leaveNode(editor); }
+    onClose();
+  };
+  return (
+    <div className="tool-pop is-math" role="dialog" aria-label="公式">
+      <AutoTextarea
+        className="plain-input math-input"
+        value={latex}
+        onChange={setLatex}
+        placeholder="LaTeX，如 \frac{a}{b}"
+        aria-label="LaTeX"
+        spellCheck={false}
+        autoFocus
+        onKeyDown={event => {
+          // Shift+Enter starts a new line, for environments such as aligned.
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); apply(); }
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); editor.commands.focus(); onClose(); }
+        }}
+      />
+      {latex.trim() && <div className="math-preview" ref={preview} />}
+      <div className="tool-pop-foot">
+        {target && <button type="button" className="btn btn-ghost" onClick={() => { editor.chain().focus().deleteSelection().run(); onClose(); }}>删除公式</button>}
+        <button type="button" className="btn btn-primary" disabled={!latex.trim()} onClick={apply}>{target ? '更新' : '插入'}</button>
+      </div>
+    </div>
+  );
+}
+
 export default function EditorView({ tab, active }: { tab: EditorTab; active: boolean }) {
   const { api, index, workspace, run, notify, go, patchDraft, clearInbox, closeTab } = useApp();
   const { draft } = tab;
@@ -189,13 +345,13 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
 
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(0);
-  const [pop, setPop] = useState<'link' | 'image' | null>(null);
+  const [pop, setPop] = useState<'link' | 'image' | 'formula' | null>(null);
   const picker = useRef<HTMLInputElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
   useDismiss(toolbar, !!pop, () => setPop(null));
 
   // Handlers the editor's key and paste bindings call; refreshed every render.
-  const actions = useRef({ submit: () => {}, link: () => {}, insertImages: async (_files: File[], _at?: number) => {} });
+  const actions = useRef({ submit: () => {}, link: () => {}, formula: (_pos: number) => {}, insertImages: async (_files: File[], _at?: number) => {} });
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const extensions = useMemo(() => [
@@ -209,6 +365,8 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
     TaskList,
     TaskItem.configure({ nested: true, a11y: { checkboxLabel: (node, checked) => `${checked ? '已完成' : '待办'}：${node.textContent}` } }),
     TableKit.configure({ table: { resizable: false } }),
+    Formula.configure({ katexOptions: KATEX_OPTIONS, onClick: (_node, pos) => actions.current.formula(pos) }),
+    BlockMath.configure({ katexOptions: { ...KATEX_OPTIONS, displayMode: true }, onClick: (_node, pos) => actions.current.formula(pos) }),
     Placeholder.configure({ placeholder: '开始写…' }),
     Extension.create({
       name: 'recordKeys',
@@ -223,7 +381,7 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
   const flush = (editor: Tiptap) => { clearTimeout(saveTimer.current); writeDraft(tab.id, tidyMarkdown(editor.getMarkdown())); };
   const editor = useEditor({
     extensions,
-    content: readDraft(tab.id),
+    content: normalizeMath(readDraft(tab.id)),
     contentType: 'markdown',
     editable: !missing,
     editorProps: {
@@ -234,6 +392,8 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
         void actions.current.insertImages(files);
         return true;
       },
+      transformPastedHTML: texFromHTML,
+      transformPasted: (slice, view) => pasteMath(slice, view.state.schema),
       handleDrop: (view, event, _slice, moved) => {
         const files = [...(event.dataTransfer?.files ?? [])].filter(isImageFile);
         if (moved || !files.length) return false;
@@ -254,6 +414,7 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
       bold: editor.isActive('bold'), italic: editor.isActive('italic'), strike: editor.isActive('strike'), code: editor.isActive('code'),
       bullet: editor.isActive('bulletList'), ordered: editor.isActive('orderedList'), task: editor.isActive('taskList'),
       quote: editor.isActive('blockquote'), codeBlock: editor.isActive('codeBlock'), link: editor.isActive('link'), table: editor.isActive('table'),
+      formula: editor.isActive('inlineMath') || editor.isActive('blockMath'),
       undo: editor.can().undo(), redo: editor.can().redo(), empty: editor.isEmpty,
     } : null,
   });
@@ -261,7 +422,7 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
   // Text sent from a composer while this draft was already open goes to the end.
   useEffect(() => {
     if (!editor || editor.isDestroyed || !tab.inbox) return;
-    editor.chain().insertContentAt(editor.state.doc.content.size, tab.inbox.text, { contentType: 'markdown' }).focus('end').run();
+    editor.chain().insertContentAt(editor.state.doc.content.size, normalizeMath(tab.inbox.text), { contentType: 'markdown' }).focus('end').run();
     clearInbox(tab.id);
   }, [editor, tab.inbox, tab.id, clearInbox]);
   // StrictMode remounts destroy the first instance, so effects check it is still alive.
@@ -294,7 +455,7 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
         if (pos == null) editor.chain().focus().insertContent(node).run();
         else editor.chain().focus().insertContentAt(pos, node).run();
         pos = undefined;
-        leaveImage(editor);
+        leaveNode(editor);
       } catch (error) {
         notify({ text: messageOf(error), error: true });
       } finally {
@@ -302,7 +463,12 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
       }
     }
   };
-  actions.current = { submit: () => void submit(), link: () => setPop('link'), insertImages };
+  const formula = (pos: number) => {
+    if (!editor || missing) return;
+    editor.commands.setNodeSelection(pos);
+    setPop('formula');
+  };
+  actions.current = { submit: () => void submit(), link: () => setPop('link'), formula, insertImages };
 
   const chain = () => editor!.chain().focus();
   return (
@@ -358,6 +524,10 @@ export default function EditorView({ tab, active }: { tab: EditorTab; active: bo
           <span className="tool-anchor">
             <Tool label="图片" active={pop === 'image'} disabled={missing} onClick={() => setPop(pop === 'image' ? null : 'image')}><ImagePlus size={15} /></Tool>
             {pop === 'image' && <ImageForm editor={editor} onPick={() => picker.current?.click()} onClose={() => setPop(null)} />}
+          </span>
+          <span className="tool-anchor">
+            <Tool label="公式" active={state.formula || pop === 'formula'} disabled={missing} onClick={() => setPop(pop === 'formula' ? null : 'formula')}><Sigma size={15} /></Tool>
+            {pop === 'formula' && <FormulaForm editor={editor} onClose={() => setPop(null)} />}
           </span>
           <Tool label="表格" active={state.table} disabled={missing || state.table} onClick={() => chain().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}><Table size={15} /></Tool>
           <Tool label="分割线" disabled={missing} onClick={() => chain().setHorizontalRule().run()}><Minus size={15} /></Tool>

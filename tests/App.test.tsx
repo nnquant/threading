@@ -122,6 +122,27 @@ describe('Threading', () => {
     expect(within(section('停滞')).queryByText('基差动量')).toBeNull();
   });
 
+  it('sets formulas in records, written directly or through the editor', async () => {
+    const user = await start();
+    await user.click(within(section('停滞')).getByText('基差动量'));
+    const panel = await screen.findByRole('complementary', { name: '策略线：基差动量' });
+    const composer = within(panel).getByRole('textbox', { name: '记录内容' });
+    const tex = () => [...panel.querySelectorAll('.timeline .katex annotation')].map(node => node.textContent);
+    // As ChatGPT writes them.
+    await user.click(composer);
+    await user.paste('基差 \\(B_t = P_t - S_t\\)');
+    await user.click(within(panel).getByRole('button', { name: '记录笔记' }));
+    await waitFor(() => expect(tex()).toEqual(['B_t = P_t - S_t']));
+    // Carried into the editor, the formula is a formula there and comes back as one.
+    await user.click(composer);
+    await user.paste('年化 \\(R \\times 365\\)');
+    await user.click(within(panel).getByRole('button', { name: '在编辑器中写' }));
+    const doc = await screen.findByRole('textbox', { name: '正文' });
+    await waitFor(() => expect(doc.querySelector('[data-type="inline-math"]')?.getAttribute('data-latex')).toBe('R \\times 365'));
+    await user.click(screen.getByRole('button', { name: '记录笔记' }));
+    await waitFor(() => expect(tex()).toEqual(['R \\times 365', 'B_t = P_t - S_t']));
+  });
+
   it('asks before deleting a thread', async () => {
     const user = await start();
     await user.click(within(section('等待中')).getByText('客户确认行业偏离上限'));

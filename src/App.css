@@ -696,6 +696,8 @@ button.project-row:hover { --surface: var(--bg-hover); background: var(--bg-hove
 .markdown th, .markdown td { padding: 4px 10px; border: 1px solid var(--line); }
 .markdown th { font-weight: 600; background: var(--bg-subtle); }
 .markdown hr { height: 1px; border: 0; background: var(--line); }
+.markdown .katex { font-size: 1.1em; }
+.markdown .katex-display { margin: .2em 0 .8em; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
 .md-image { max-width: 100%; max-height: 420px; border: 1px solid var(--line); border-radius: var(--radius); vertical-align: top; cursor: zoom-in; }
 .md-image-broken { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px dashed var(--line-strong); border-radius: var(--radius); font-size: 12px; color: var(--fg-3); }
 .lightbox { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 40px; background: rgba(17, 17, 17, .72); cursor: zoom-out; animation: rise .14s ease-out; }
@@ -715,6 +717,10 @@ button.project-row:hover { --surface: var(--bg-hover); background: var(--bg-hove
 .tool-pop .plain-input { flex: none; height: 30px; }
 .tool-pop > .btn { justify-content: center; }
 .tool-pop-foot { display: flex; justify-content: flex-end; gap: 6px; }
+.tool-pop.is-math { width: 380px; }
+.tool-pop .math-input { flex: none; height: auto; min-height: 30px; overflow: hidden; padding: 5px 8px; resize: none; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+.math-preview { max-height: 180px; overflow: auto; padding: 8px 10px; border-radius: var(--radius); background: var(--bg-subtle); text-align: center; }
+.math-preview .katex-display { margin: 0; }
 .tool-table { display: inline-flex; gap: 2px; margin-left: 6px; padding-left: 8px; border-left: 1px solid var(--line); }
 .tool-table button { height: 26px; padding: 0 7px; border-radius: 4px; font-size: 12px; color: var(--fg-2); white-space: nowrap; }
 .tool-table button:hover { background: var(--bg-hover); color: var(--fg); }
@@ -749,6 +755,12 @@ button.project-row:hover { --surface: var(--bg-hover); background: var(--bg-hove
 .doc-image { display: block; max-width: 100%; height: auto; margin: .3em 0 .8em; border: 1px solid var(--line); border-radius: var(--radius); }
 .doc-image.ProseMirror-selectednode { outline: 2px solid var(--fg); outline-offset: 2px; }
 .doc-image.is-broken { min-width: 160px; min-height: 48px; border-style: dashed; }
+.editor-doc .tiptap-mathematics-render { border-radius: 3px; cursor: pointer; }
+.editor-doc .tiptap-mathematics-render:hover { background: var(--bg-hover); }
+.editor-doc .tiptap-mathematics-render.ProseMirror-selectednode { background: var(--bg-muted); }
+.editor-doc [data-type="inline-math"] { padding: 0 1px; }
+.editor-doc [data-type="block-math"] { margin: .2em 0 .9em; padding: 4px 0; overflow-x: auto; overflow-y: hidden; }
+.editor-doc [data-type="block-math"] .katex-display { margin: 0; }
 
 /* Composer and timeline: entries are knots on a vertical thread */
 .composer { border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }
