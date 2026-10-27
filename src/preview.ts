@@ -126,6 +126,8 @@ function readStored(): Workspace | null {
 
 export function createPreviewApi(): Api {
   let workspace = readStored() ?? seedWorkspace();
+  // Keep the seeded ids from the first visit, so tabs and drafts that point at them survive a reload.
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace)); } catch { /* preview data stays in memory */ }
   const images = new Map<string, Uint8Array>();
   const commit = <T>(run: (tx: Tx) => T): Promise<Change> => {
     try {

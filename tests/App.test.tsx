@@ -4,6 +4,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import App from '../src/App';
 
+// The record editor measures text ranges to keep the cursor in view; jsdom has no layout, so ranges get empty boxes.
+const noBox = { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON: () => ({}) } as DOMRect;
+Range.prototype.getBoundingClientRect = () => noBox;
+Range.prototype.getClientRects = () => Object.assign([], { item: () => null }) as unknown as DOMRectList;
+
 beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
@@ -165,7 +170,7 @@ describe('Threading', () => {
     const user = await start();
     const nav = screen.getByRole('navigation', { name: '导航' });
     const search = async (text: string) => {
-      await user.click(screen.getByRole('button', { name: /搜索或跳转/ }));
+      await user.click(screen.getByRole('button', { name: '搜索或跳转' }));
       await user.type(await screen.findByRole('combobox', { name: '搜索' }), text);
     };
     expect(within(nav).getAllByText('示例')).toHaveLength(3);
@@ -207,5 +212,62 @@ describe('Threading', () => {
     await user.click(screen.getByRole('button', { name: '记录进展' }));
     expect(await screen.findByText('回撤原因找到了，是小盘因子暴露。')).toBeTruthy();
     expect(screen.getByRole('button', { name: '健康度：正常' })).toBeTruthy();
+  });
+
+  it('opens each project in a tab of its own that keeps its place', async () => {
+    const user = await start();
+    const nav = screen.getByRole('navigation', { name: '导航' });
+    const tabs = screen.getByRole('tablist', { name: '标签页' });
+    await user.click(within(nav).getByRole('button', { name: /期权波动率/ }));
+    expect(within(tabs).getByRole('tab', { name: '期权波动率', selected: true })).toBeTruthy();
+    await user.click(await within(screen.getByRole('main')).findByText('50ETF 波动率曲面套利'));
+    expect(await screen.findByRole('complementary', { name: '策略线：50ETF 波动率曲面套利' })).toBeTruthy();
+    // Views from the sidebar go to the home tab; the project tab stays as it was.
+    await user.click(within(nav).getByRole('button', { name: /周回顾/ }));
+    expect(within(tabs).getByRole('tab', { name: '周回顾', selected: true })).toBeTruthy();
+    expect(screen.queryByRole('complementary')).toBeNull();
+    await user.click(within(tabs).getByRole('tab', { name: '期权波动率' }));
+    expect(screen.getByRole('complementary', { name: '策略线：50ETF 波动率曲面套利' })).toBeTruthy();
+    // Opening the project again brings back its tab instead of adding one.
+    await user.click(within(nav).getByRole('button', { name: /期权波动率/ }));
+    expect(within(tabs).getAllByRole('tab')).toHaveLength(2);
+    await user.click(within(tabs).getByRole('button', { name: '关闭 期权波动率' }));
+    expect(within(tabs).getAllByRole('tab')).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: '周回顾', level: 1 })).toBeTruthy();
+  });
+
+  it('carries a record from the composer to the editor tab and files it on the line', async () => {
+    const user = await start();
+    await user.click(within(section('停滞')).getByText('基差动量'));
+    const panel = await screen.findByRole('complementary', { name: '策略线：基差动量' });
+    await user.click(within(panel).getByRole('radio', { name: '决策' }));
+    await user.type(within(panel).getByRole('textbox', { name: '记录内容' }), '改用南华现货指数');
+    await user.click(within(panel).getByRole('button', { name: '在编辑器中写' }));
+    const tabs = screen.getByRole('tablist', { name: '标签页' });
+    expect(await within(tabs).findByRole('tab', { name: '决策：基差动量', selected: true })).toBeTruthy();
+    expect((await screen.findByRole('textbox', { name: '正文' })).textContent).toBe('改用南华现货指数');
+    // The composer it came from is empty now and points at the draft.
+    await user.click(within(tabs).getByRole('tab', { name: '焦点' }));
+    expect((within(panel).getByRole('textbox', { name: '记录内容' }) as HTMLTextAreaElement).value).toBe('');
+    await user.click(within(panel).getByRole('button', { name: '继续编辑决策草稿' }));
+    await user.click(screen.getByRole('button', { name: '记录决策' }));
+    await waitFor(() => expect(within(tabs).getAllByRole('tab')).toHaveLength(1));
+    expect(screen.getByRole('status').textContent).toContain('已记录决策');
+    expect(await within(panel).findByText('改用南华现货指数')).toBeTruthy();
+    expect(within(panel).queryByRole('button', { name: '继续编辑决策草稿' })).toBeNull();
+  });
+
+  it('asks before throwing away a draft', async () => {
+    const user = await start();
+    await user.click(within(section('停滞')).getByText('基差动量'));
+    const panel = await screen.findByRole('complementary', { name: '策略线：基差动量' });
+    await user.type(within(panel).getByRole('textbox', { name: '记录内容' }), '半成品');
+    await user.click(within(panel).getByRole('button', { name: '在编辑器中写' }));
+    const tabs = screen.getByRole('tablist', { name: '标签页' });
+    await user.click(await within(tabs).findByRole('button', { name: '关闭 笔记：基差动量' }));
+    const confirm = await screen.findByRole('dialog', { name: '放弃这份草稿？' });
+    await user.click(within(confirm).getByRole('button', { name: '放弃草稿' }));
+    await waitFor(() => expect(within(tabs).getAllByRole('tab')).toHaveLength(1));
+    expect(within(panel).queryByRole('button', { name: /^继续编辑/ })).toBeNull();
   });
 });

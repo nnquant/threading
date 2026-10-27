@@ -1,15 +1,14 @@
 import { useState } from 'react';
-import { ArrowRight, Pencil, Trash2 } from 'lucide-react';
+import { ArrowRight, FilePenLine, Maximize2, Pencil, Trash2 } from 'lucide-react';
 import { useApp } from './context';
 import { EVENT_LABEL, HEALTH_LABEL, HEALTHS, KIND_LABEL, eventValue, fullTime, relativeTime } from './labels';
 import { AutoTextarea, HealthDot, Markdown, Segmented } from './ui';
-import type { Entry, EntryKind, Health, Id } from './types';
-
-type Writable = Exclude<EntryKind, 'event'>;
+import type { Writable } from './tabs';
+import type { Entry, Health, Id } from './types';
 
 /** Composer for a thread (note / decision / result) or a project (update with health / note / decision). */
 export function Composer({ projectId, threadId = null, compact = false }: { projectId: Id; threadId?: Id | null; compact?: boolean }) {
-  const { run, index } = useApp();
+  const { run, index, editors, openEditor, showTab } = useApp();
   const kinds: Writable[] = threadId ? ['note', 'decision', 'result'] : ['update', 'note', 'decision'];
   const [kind, setKind] = useState<Writable>(kinds[0]);
   const [body, setBody] = useState('');
@@ -22,6 +21,9 @@ export function Composer({ projectId, threadId = null, compact = false }: { proj
     setBusy(false);
     if (change) setBody('');
   };
+  const drafting = editors.find(tab => !tab.draft.entryId && tab.draft.projectId === projectId && tab.draft.threadId === threadId);
+  // The editor tab takes over whatever is typed here so far.
+  const expand = () => { openEditor({ projectId, threadId, kind, health }, body); setBody(''); };
   const placeholder = kind === 'update' ? '这个项目最近怎么样？下一步重点是什么？'
     : kind === 'decision' ? '做了什么决定，为什么？' : kind === 'result' ? '跑出了什么结果？' : '记录想法、发现或上下文';
   return (
@@ -31,7 +33,15 @@ export function Composer({ projectId, threadId = null, compact = false }: { proj
         {kind === 'update' && (
           <Segmented<Health> label="健康度" value={health} onChange={setHealth} options={HEALTHS.map(value => ({ value, label: HEALTH_LABEL[value], icon: <HealthDot health={value} decorative /> }))} />
         )}
+        <button type="button" className="icon-btn composer-expand" onClick={expand} aria-label="在编辑器中写" title="在编辑器中写">
+          <Maximize2 size={14} />
+        </button>
       </div>
+      {drafting && (
+        <button type="button" className="composer-draft" onClick={() => showTab(drafting.id)}>
+          <FilePenLine size={13} />继续编辑{KIND_LABEL[drafting.draft.kind]}草稿
+        </button>
+      )}
       <AutoTextarea
         value={body}
         onChange={setBody}
@@ -49,7 +59,7 @@ export function Composer({ projectId, threadId = null, compact = false }: { proj
 }
 
 export function Timeline({ entries, showThread = false, empty }: { entries: Entry[]; showThread?: boolean; empty: string }) {
-  const { run, now, index, openThread, confirm } = useApp();
+  const { run, now, index, openThread, confirm, openEditor } = useApp();
   const [editing, setEditing] = useState<Id | null>(null);
   const [draft, setDraft] = useState('');
   if (!entries.length) return <p className="timeline-empty">{empty}</p>;
@@ -117,6 +127,14 @@ export function Timeline({ entries, showThread = false, empty }: { entries: Entr
                   />
                   <div className="composer-foot">
                     <span className="muted">Ctrl+Enter 保存，Esc 取消</span>
+                    <button
+                      className="icon-btn entry-expand"
+                      aria-label="在编辑器中编辑"
+                      title="在编辑器中编辑"
+                      onClick={() => { openEditor({ projectId: entry.projectId, threadId: entry.threadId, entryId: entry.id, kind: entry.kind as Writable, health: entry.health ?? 'onTrack' }, draft); setEditing(null); }}
+                    >
+                      <Maximize2 size={14} />
+                    </button>
                     <button className="btn btn-ghost" onClick={() => setEditing(null)}>取消</button>
                     <button className="btn btn-primary" disabled={!draft.trim()} onClick={() => void save(entry)}>保存</button>
                   </div>
