@@ -1,7 +1,7 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useApp } from './context';
 import { STAGE_LABEL } from './labels';
-import { EmptyState } from './ui';
+import { EmptyState, textWidth } from './ui';
 import type { Id, Thread } from './types';
 
 const W = 760;
@@ -13,8 +13,7 @@ const PEAK = 64;
 const xAt = (hill: number) => LEFT + (RIGHT - LEFT) * (hill / 100);
 const yAt = (hill: number) => BASE - (BASE - PEAK) * (1 - Math.cos(2 * Math.PI * (hill / 100))) / 2;
 const CURVE = Array.from({ length: 81 }, (_, i) => `${i ? 'L' : 'M'}${xAt(i * 1.25).toFixed(1)} ${yAt(i * 1.25).toFixed(1)}`).join(' ');
-/** Rough rendered width of a label: CJK glyphs are about one em, Latin about half. */
-const labelWidth = (text: string) => [...text].reduce((sum, char) => sum + (char.charCodeAt(0) > 0x2e80 ? 12 : 6.6), 0) + 6;
+const labelWidth = (text: string) => textWidth(text) + 6;
 
 /** Shape Up hill chart: each open thread is a dot; drag it along the hill to say how much is still unknown. */
 export default function HillChart({ threads }: { threads: Thread[] }) {
@@ -78,7 +77,7 @@ export default function HillChart({ threads }: { threads: Thread[] }) {
         {dots.map(({ thread, hill, x, y, lx, ly, anchor }) => (
           <g
             key={thread.id}
-            className={`hill-dot is-${thread.state} ${selected === thread.id ? 'is-selected' : ''} ${drag?.id === thread.id ? 'is-dragging' : ''}`}
+            className={`hill-dot stage-${thread.stage} is-${thread.state} ${selected === thread.id ? 'is-selected' : ''} ${drag?.id === thread.id ? 'is-dragging' : ''}`}
             onPointerDown={event => start(event, thread)}
             onPointerMove={move}
             onPointerUp={() => end(thread)}
@@ -100,7 +99,7 @@ export default function HillChart({ threads }: { threads: Thread[] }) {
           >
             {Math.abs(ly - (y - 12)) > 1 && <line className="hill-leader" x1={x} y1={y - 6} x2={x} y2={ly + 4} />}
             <circle cx={x} cy={y} r={14} className="hill-hit" />
-            <circle cx={x} cy={y} r={5.5} className="hill-knot" />
+            <circle cx={x} cy={y} r={6.5} className="hill-knot" />
             <text x={lx} y={ly} textAnchor={anchor}>{thread.title}</text>
           </g>
         ))}

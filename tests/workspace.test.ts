@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { dayDiff, daysSince, dueLabel, targetLabel, todayIso } from '../src/labels';
 import { seedWorkspace } from '../src/demo';
+import { loomScale, loomTicks } from '../src/ThreadLoom';
 import { ancestorsOf, applyChange, buildIndex, compareThreads, descendantsOf, focusOf, matchesThread, reviewQueue, threadSpans, threadTree } from '../src/workspace';
 import type { Workspace } from '../src/types';
 
@@ -174,6 +175,21 @@ describe('demo data', () => {
     expect(daysSince(titled(workspace, '50ETF 波动率曲面套利').waitingSince!, late)).toBe(6);
     const times = [...workspace.threads.map(row => row.lastActivityAt), ...workspace.entries.map(row => row.createdAt), ...workspace.todos.map(row => row.updatedAt)];
     expect(Math.max(...times)).toBeLessThanOrEqual(late);
+  });
+});
+
+describe('loom scale', () => {
+  it('covers whole days around today and labels Mondays when a week has room', () => {
+    const scale = loomScale('4w', NOW, 1000);
+    expect(scale.start).toBe(new Date(2026, 8, 28).getTime());
+    expect(scale.end).toBe(new Date(2026, 10, 3).getTime());
+    expect(scale.x(scale.start)).toBe(8);
+    expect(scale.x(scale.end)).toBe(992);
+    expect(loomTicks(scale).map(tick => tick.label)).toEqual(['9/28', '10/5', '10/12', '10/19', '10/26', '11/2']);
+  });
+
+  it('falls back to months when weeks are too narrow', () => {
+    expect(loomTicks(loomScale('26w', NOW, 600)).map(tick => tick.label)).toEqual(['5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']);
   });
 });
 

@@ -10,7 +10,8 @@ export type View =
   | { kind: 'org'; id: Id }
   | { kind: 'project'; id: Id };
 
-export interface NewThreadPreset { projectId?: Id; stage?: Stage }
+/** Defaults for the new-thread dialog; `parentId` makes it a sub-line. */
+export interface NewThreadPreset { projectId?: Id; parentId?: Id; stage?: Stage }
 export interface ConfirmRequest { title: string; body: string; confirmLabel: string; onConfirm: () => Promise<unknown> | void }
 export interface Notice { text: string; error?: boolean; action?: { label: string; run: () => void } }
 

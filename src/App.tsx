@@ -113,11 +113,16 @@ export default function App() {
       }
       if (isTyping(event.target)) return;
       if (event.key === 'Escape' && selected) { setSelected(null); return; }
-      if (event.key.toLowerCase() === 'n' && !event.ctrlKey && !event.metaKey && !event.altKey && workspace) { event.preventDefault(); newThread(); }
+      if (event.key.toLowerCase() === 'n' && !event.ctrlKey && !event.metaKey && !event.altKey && workspace) {
+        event.preventDefault();
+        // Shift+N branches a sub-line off the open line.
+        const parent = event.shiftKey && selected ? index?.thread.get(selected) : undefined;
+        newThread(parent ? { projectId: parent.projectId, parentId: parent.id, stage: parent.stage } : {});
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [dialog, confirmRequest, palette, selected, go, newThread, workspace]);
+  }, [dialog, confirmRequest, palette, selected, go, newThread, workspace, index]);
 
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {

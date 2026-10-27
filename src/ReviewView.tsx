@@ -5,8 +5,8 @@ import { STATES, STATE_LABEL, daysSince, relativeTime } from './labels';
 import { HillSlider, WaitingInput } from './ThreadPanel';
 import { Composer, Timeline } from './Timeline';
 import Todos from './Todos';
-import { EmptyState, InlineEdit, OrgMark, PriorityIcon, Segmented, StageTrack, StateIcon } from './ui';
-import { reviewQueue } from './workspace';
+import { EmptyState, InlineEdit, OrgMark, PriorityIcon, Segmented, StagePicker, StateIcon } from './ui';
+import { ancestorsOf, reviewQueue } from './workspace';
 import type { Id } from './types';
 
 /** Weekly review: walk every open line once, confirm where it stands and what happens next. */
@@ -60,6 +60,7 @@ export default function ReviewView() {
             {org && <><OrgMark org={org} />{org.name}</>}
             <span className="crumb-sep">/</span>
             {project?.name}
+            {ancestorsOf(index, thread).map(item => <span key={item.id}><span className="crumb-sep">/</span>{item.title}</span>)}
             <span className="review-since">最近推进 {relativeTime(thread.lastActivityAt, now)}{thread.reviewedAt ? `，上次回顾 ${daysSince(thread.reviewedAt, now)} 天前` : '，还没有回顾过'}</span>
           </div>
           <div className="review-title">
@@ -67,7 +68,7 @@ export default function ReviewView() {
             <InlineEdit className="panel-title" label="策略线名称" value={thread.title} maxLength={120} onCommit={title => void run(api => api.updateThread(thread.id, { title }))} />
           </div>
           <p className="review-prompt">它还值得推进吗？现在在哪个阶段、山丘的哪一侧？下一步是否明确到可以直接动手？</p>
-          <StageTrack stage={thread.stage} size="lg" onChange={stage => void run(api => api.updateThread(thread.id, { stage, hill: 0 }))} />
+          <StagePicker stage={thread.stage} onChange={stage => void run(api => api.updateThread(thread.id, { stage, hill: 0 }))} />
           <dl className="props">
             <dt>状态</dt>
             <dd>

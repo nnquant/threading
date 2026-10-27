@@ -78,7 +78,9 @@ export function Timeline({ entries, showThread = false, empty }: { entries: Entr
                 {thread && <button className="entry-thread" onClick={() => openThread(thread.id)}>{thread.title}</button>}
                 {field === 'created'
                   ? <span>创建于{eventValue(field, to)}阶段</span>
-                  : <span>{EVENT_LABEL[field]} {eventValue(field, from)} <ArrowRight size={11} aria-label="改为" /> {eventValue(field, to)}</span>}
+                  : field === 'parent'
+                    ? <span>{to ? `移到「${to}」下` : `移出「${from ?? ''}」，成为一级策略线`}</span>
+                    : <span>{EVENT_LABEL[field]} {eventValue(field, from)} <ArrowRight size={11} aria-label="改为" /> {eventValue(field, to)}</span>}
                 {time}
                 <button className="icon-btn icon-btn-sm entry-action" onClick={() => remove(entry)} aria-label="删除变更记录"><Trash2 size={12} /></button>
               </div>

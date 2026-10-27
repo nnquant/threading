@@ -72,7 +72,7 @@ describe('Threading', () => {
     await user.keyboard('n');
     const dialog = await screen.findByRole('dialog', { name: '新建策略线' });
     await user.type(within(dialog).getByPlaceholderText('例如：期限结构因子'), '偏度因子');
-    await user.selectOptions(within(dialog).getByRole('combobox'), '期权波动率');
+    await user.selectOptions(within(dialog).getByRole('combobox', { name: '项目' }), '期权波动率');
     await user.click(within(dialog).getByRole('radio', { name: '研究' }));
     await user.type(within(dialog).getByPlaceholderText('接下来要做的第一件具体的事'), '拉取期权链');
     await user.click(within(dialog).getByRole('button', { name: '创建策略线' }));
@@ -80,6 +80,25 @@ describe('Threading', () => {
     expect(within(panel).getByRole('radio', { name: '研究' }).getAttribute('aria-checked')).toBe('true');
     expect((within(panel).getByRole('textbox', { name: '待办内容' }) as HTMLTextAreaElement).value).toBe('拉取期权链');
     expect(within(panel).getByText('创建于研究阶段')).toBeTruthy();
+  });
+
+  it('branches a sub-line off a row and nests it under its parent', async () => {
+    const user = await start();
+    await user.click(screen.getByRole('button', { name: /全部策略线/ }));
+    const row = (await screen.findByText('基差动量')).closest('button')!;
+    await user.click(within(row).getByTitle('新建子策略线（Shift+N）'));
+    const dialog = await screen.findByRole('dialog', { name: '新建子策略线' });
+    expect((within(dialog).getByRole('combobox', { name: /上级/ }) as HTMLSelectElement).selectedOptions[0].textContent).toBe('基差动量');
+    await user.type(within(dialog).getByPlaceholderText('例如：黑色板块'), '现货价格源对比');
+    await user.click(within(dialog).getByRole('button', { name: '创建策略线' }));
+    const panel = await screen.findByRole('complementary', { name: '策略线：现货价格源对比' });
+    expect(within(within(panel).getByRole('navigation', { name: '位置' })).getByRole('button', { name: '基差动量' })).toBeTruthy();
+    const titles = [...document.querySelectorAll('[data-thread] .cell-title > .truncate')].map(node => node.textContent);
+    expect(titles[titles.indexOf('基差动量') + 1]).toBe('现货价格源对比');
+    // The parent's work now goes on in its sub-line, which is the one missing a next step.
+    await user.click(screen.getByRole('button', { name: /焦点/ }));
+    expect(within(section('缺少下一步')).getByText('现货价格源对比')).toBeTruthy();
+    expect(within(section('缺少下一步')).queryByText('基差动量')).toBeNull();
   });
 
   it('records stage changes and notes on the thread timeline', async () => {
@@ -120,11 +139,34 @@ describe('Threading', () => {
     expect(await screen.findByRole('complementary', { name: '策略线：宏观因子择时' })).toBeTruthy();
   });
 
+  it('draws every line as a thread across time', async () => {
+    const user = await start();
+    await user.click(screen.getByRole('button', { name: /全部策略线/ }));
+    await user.click(await screen.findByRole('radio', { name: '线程' }));
+    expect(within(screen.getByRole('radiogroup', { name: '时间范围' })).getByRole('radio', { name: '12 周' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('button', { name: /^基差动量，研究，进行中，\d+ 天未推进$/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^期限结构因子，回测，进行中，下一步：补 2015–2017 年样本外回测$/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^技术面趋势/ })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /^50ETF 波动率曲面套利，回测，等待，已等 \d+ 天：数据组补齐 2019 年分钟数据$/ }));
+    expect(await screen.findByRole('complementary', { name: '策略线：50ETF 波动率曲面套利' })).toBeTruthy();
+    // Arrow keys walk the lines in sidebar order, across projects and organizations.
+    await user.keyboard('{ArrowDown}');
+    expect(await screen.findByRole('complementary', { name: '策略线：基本面 Alpha 模型' })).toBeTruthy();
+
+    await user.click(screen.getByRole('checkbox', { name: /显示已结束/ }));
+    expect(screen.getByRole('button', { name: /^技术面趋势，退役，已结束$/ })).toBeTruthy();
+    // It closed 30 days ago, before the four-week range begins.
+    await user.click(screen.getByRole('radio', { name: '4 周' }));
+    expect(screen.queryByRole('button', { name: /^技术面趋势/ })).toBeNull();
+  });
+
   it('shows a project with its threads, hill chart and activity', async () => {
     const user = await start();
     await user.click(within(screen.getByRole('navigation', { name: '导航' })).getByRole('button', { name: /中证 1000 指数增强/ }));
     expect(await screen.findByRole('heading', { name: '中证 1000 指数增强', level: 1 })).toBeTruthy();
-    expect(screen.getByText('基本面 Alpha 模型')).toBeTruthy();
+    // Its paused sub-line, grouped apart from it, names it as its parent too.
+    expect(within(screen.getByRole('main')).getAllByText('基本面 Alpha 模型')).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: '山丘图' }));
     expect(screen.getByRole('slider', { name: '高频量价因子，回测' }).getAttribute('aria-valuenow')).toBe('55');
     await user.click(screen.getByRole('button', { name: /^动态/ }));

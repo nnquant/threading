@@ -4,6 +4,7 @@ import { desktop, isDesktop, type Api } from './bridge';
 import { useApp, type ConfirmRequest, type NewThreadPreset } from './context';
 import { ORG_COLOR, PRIORITIES, PRIORITY_LABEL, STAGE_LABEL, STATUSES, STATUS_LABEL } from './labels';
 import { Dialog, PriorityIcon, Segmented } from './ui';
+import { compareThreads, threadTree } from './workspace';
 import { ORG_COLORS, STAGES, type Change, type Id, type OrgColor, type Priority, type Stage } from './types';
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -37,13 +38,18 @@ export function ThreadDialog({ preset, onClose }: { preset: NewThreadPreset; onC
     org, projects: (index.projectsOf.get(org.id) ?? []).filter(project => project.status === 'active' || project.id === preset.projectId),
   })).filter(group => group.projects.length);
   const [projectId, setProjectId] = useState(preset.projectId ?? projects[0]?.projects[0]?.id ?? '');
+  const [parentId, setParentId] = useState(preset.parentId ?? '');
   const [title, setTitle] = useState('');
   const [stage, setStage] = useState<Stage>(preset.stage ?? 'idea');
   const [priority, setPriority] = useState<Priority>('normal');
   const [nextAction, setNextAction] = useState('');
+  const parent = parentId ? index.thread.get(parentId) : undefined;
+  // Any unfinished line of the project can take a sub-line; the preset parent stays even when it has finished.
+  const parents = threadTree([...(index.threadsOf.get(projectId) ?? [])].filter(thread => thread.state !== 'closed' || thread.id === parentId).sort(compareThreads));
   const { busy, error, submit } = useSubmit(
-    api => api.createThread({ projectId, title, stage, priority, nextAction }),
-    change => { onClose(); const created = change.threads?.[0]; if (created) openThread(created.id); },
+    api => api.createThread({ projectId, parentId: parentId || null, title, stage, priority, nextAction }),
+    // The new line is the only row the backend created; touched parents come back in the same list.
+    change => { onClose(); const created = change.threads?.find(row => !index.thread.has(row.id)); if (created) openThread(created.id); },
   );
   if (!projects.length) {
     return (
@@ -53,21 +59,32 @@ export function ThreadDialog({ preset, onClose }: { preset: NewThreadPreset; onC
     );
   }
   return (
-    <Dialog title="新建策略线" subtitle="项目里一条独立推进的研究或交易线" onClose={onClose}>
+    <Dialog
+      title={parent ? '新建子策略线' : '新建策略线'}
+      onClose={onClose}
+    >
       <form className="dialog-body" onSubmit={submit}>
         <FormError error={error} />
         <Field label="名称">
-          <input data-autofocus value={title} onChange={event => setTitle(event.target.value)} maxLength={120} placeholder="例如：期限结构因子" required />
+          <input data-autofocus value={title} onChange={event => setTitle(event.target.value)} maxLength={120} placeholder={parent ? '例如：黑色板块' : '例如：期限结构因子'} required />
         </Field>
-        <Field label="项目">
-          <select value={projectId} onChange={event => setProjectId(event.target.value)}>
-            {projects.map(group => (
-              <optgroup key={group.org.id} label={`${group.org.name}（${group.org.code}）`}>
-                {group.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-              </optgroup>
-            ))}
-          </select>
-        </Field>
+        <div className="field-row is-even">
+          <Field label="项目">
+            <select value={projectId} onChange={event => { setProjectId(event.target.value); setParentId(''); }}>
+              {projects.map(group => (
+                <optgroup key={group.org.id} label={`${group.org.name}（${group.org.code}）`}>
+                  {group.projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </Field>
+          <Field label="上级">
+            <select value={parentId} onChange={event => setParentId(event.target.value)}>
+              <option value="">无</option>
+              {parents.map(row => <option key={row.thread.id} value={row.thread.id}>{`${'　'.repeat(row.depth)}${row.thread.title}`}</option>)}
+            </select>
+          </Field>
+        </div>
         <div className="field"><span>阶段</span>
           <Segmented<Stage> label="阶段" value={stage} onChange={setStage} options={STAGES.map(value => ({ value, label: STAGE_LABEL[value] }))} />
         </div>

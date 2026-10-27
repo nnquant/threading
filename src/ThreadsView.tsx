@@ -1,14 +1,15 @@
 import { useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Columns3, List, Plus, Search, X } from 'lucide-react';
+import { Columns3, CornerDownRight, GitBranch, GitBranchPlus, GitCommitHorizontal, List, Plus, Search, X } from 'lucide-react';
 import { useApp } from './context';
 import { PRIORITIES, PRIORITY_LABEL, STAGE_LABEL, STATES, STATE_LABEL, daysSince, dueLabel, fullTime, relativeTime, todayIso } from './labels';
-import { Dropdown, EmptyState, OrgMark, PriorityIcon, Segmented, StageTrack, StateLabel } from './ui';
-import { compareThreads, isOpen, isStale, matchesThread, nextTodo } from './workspace';
+import ThreadLoom, { LOOM_RANGES, type LoomRange } from './ThreadLoom';
+import { Dropdown, EmptyState, OrgMark, PriorityIcon, Segmented, StageIcon, StageLabel, StateLabel, TreeLead, TreePath, treeStep, useCollapsed } from './ui';
+import { ancestorsOf, compareThreads, isOpen, isStale, matchesThread, needsNext, nextTodo, parentOf, threadTree, type TreeRow } from './workspace';
 import { STAGES, type Id, type Stage, type Thread } from './types';
 
-type Layout = 'list' | 'board';
+type Layout = 'list' | 'board' | 'loom';
 type GroupBy = 'project' | 'stage' | 'state' | 'priority' | 'none';
-interface Prefs { layout: Layout; group: GroupBy; showClosed: boolean }
+interface Prefs { layout: Layout; group: GroupBy; showClosed: boolean; range: LoomRange }
 const GROUPS: { value: GroupBy; label: string }[] = [
   { value: 'project', label: '按项目' }, { value: 'stage', label: '按阶段' }, { value: 'state', label: '按状态' },
   { value: 'priority', label: '按优先级' }, { value: 'none', label: '不分组' },
@@ -23,9 +24,10 @@ interface Group { key: string; label: string; threads: Thread[] }
 export default function ThreadsView({ threads, scope, projectId }: { threads: Thread[]; scope: 'all' | 'project'; projectId?: Id }) {
   const { index, run, newThread } = useApp();
   const prefsKey = `threading.threads.${scope}.v1`;
-  const [prefs, setPrefs] = useState<Prefs>(() => readPrefs(prefsKey, { layout: 'list', group: scope === 'all' ? 'project' : 'state', showClosed: false }));
+  const [prefs, setPrefs] = useState<Prefs>(() => readPrefs(prefsKey, { layout: 'list', group: scope === 'all' ? 'project' : 'state', showClosed: false, range: '12w' }));
   const [query, setQuery] = useState('');
-  const update = (patch: Partial<Prefs>) => {
+  const [collapsed, fold] = useCollapsed();
+  const update =(patch: Partial<Prefs>) => {
     const next = { ...prefs, ...patch };
     setPrefs(next);
     try { localStorage.setItem(prefsKey, JSON.stringify(next)); } catch { /* per-viewer convenience only */ }
@@ -48,8 +50,15 @@ export default function ThreadsView({ threads, scope, projectId }: { threads: Th
           label="布局"
           value={prefs.layout}
           onChange={layout => update({ layout })}
-          options={[{ value: 'list', label: '列表', icon: <List size={13} /> }, { value: 'board', label: '看板', icon: <Columns3 size={13} /> }]}
+          options={[
+            { value: 'list', label: '列表', icon: <List size={13} /> },
+            { value: 'board', label: '看板', icon: <Columns3 size={13} /> },
+            { value: 'loom', label: '线程', icon: <GitCommitHorizontal size={13} /> },
+          ]}
         />
+        {prefs.layout === 'loom' && (
+          <Segmented<LoomRange> label="时间范围" value={prefs.range} onChange={range => update({ range })} options={LOOM_RANGES.map(({ value, label }) => ({ value, label }))} />
+        )}
         {prefs.layout === 'list' && (
           <Dropdown<GroupBy>
             label="分组"
@@ -81,12 +90,16 @@ export default function ThreadsView({ threads, scope, projectId }: { threads: Th
         )
         : prefs.layout === 'board'
           ? <Board threads={visible} scope={scope} projectId={projectId} onMove={moveStage} />
-          : <ThreadList threads={visible} scope={scope} groupBy={groupBy} filtered={!!query} />}
+          : prefs.layout === 'loom'
+            ? <ThreadLoom threads={visible} scope={scope} range={prefs.range} filtered={!!query} collapsed={collapsed} onFold={fold} />
+            : <ThreadList threads={visible} scope={scope} groupBy={groupBy} filtered={!!query} collapsed={collapsed} onFold={fold} />}
     </div>
   );
 }
 
-function ThreadList({ threads, scope, groupBy, filtered }: { threads: Thread[]; scope: 'all' | 'project'; groupBy: GroupBy; filtered: boolean }) {
+function ThreadList({ threads, scope, groupBy, filtered, collapsed, onFold }: {
+  threads: Thread[]; scope: 'all' | 'project'; groupBy: GroupBy; filtered: boolean; collapsed: ReadonlySet<Id>; onFold: (id: Id, open?: boolean) => void;
+}) {
   const { index, selected, openThread } = useApp();
   // The project column only adds information when rows are not already grouped by project.
   const showProject = scope === 'all' && groupBy !== 'project';
@@ -103,15 +116,19 @@ function ThreadList({ threads, scope, groupBy, filtered }: { threads: Thread[]; 
       return { key, label, threads: threads.filter(thread => keyOf(thread) === key) };
     }).filter(group => group.threads.length);
   }, [threads, groupBy, index]);
-  const flat = groups.flatMap(group => group.threads);
+  // Inside each group a sub-line sits under its parent; one whose parent is elsewhere names it instead.
+  const trees = useMemo(() => groups.map(group => ({ ...group, rows: threadTree(group.threads, collapsed) })), [groups, collapsed]);
+  const flat = trees.flatMap(group => group.rows);
+  const nested = flat.some(row => row.depth > 0 || row.children > 0);
   const onKeyDown = (event: ReactKeyboardEvent) => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const step = treeStep(flat, selected, event.key);
+    if (!step) return;
     event.preventDefault();
-    const at = flat.findIndex(thread => thread.id === selected);
-    const next = flat[at < 0 ? 0 : Math.min(flat.length - 1, Math.max(0, at + (event.key === 'ArrowDown' ? 1 : -1)))];
-    if (!next) return;
-    openThread(next.id);
-    listRef.current?.querySelector<HTMLElement>(`[data-thread="${next.id}"]`)?.focus();
+    if (step.fold) onFold(...step.fold);
+    if (step.select) {
+      openThread(step.select);
+      listRef.current?.querySelector<HTMLElement>(`[data-thread="${step.select}"]`)?.focus();
+    }
   };
   if (!threads.length) return <EmptyState title={filtered ? '没有匹配的策略线' : '没有进行中的策略线'}>{filtered ? '换个关键词试试。' : '已结束的策略线可以通过上方的开关显示。'}</EmptyState>;
   return (
@@ -125,7 +142,7 @@ function ThreadList({ threads, scope, groupBy, filtered }: { threads: Thread[]; 
         <span className="cell-next">下一步</span>
         <span className="cell-activity">最近推进</span>
       </div>
-      {groups.map(group => {
+      {trees.map(group => {
         const project = groupBy === 'project' ? index.project.get(group.key) : undefined;
         const org = project && index.org.get(project.orgId);
         return (
@@ -138,7 +155,17 @@ function ThreadList({ threads, scope, groupBy, filtered }: { threads: Thread[]; 
                 <em>{group.threads.length}</em>
               </h3>
             )}
-            {group.threads.map(thread => <ThreadRow key={thread.id} thread={thread} showProject={showProject} selected={selected === thread.id} onOpen={() => openThread(thread.id)} />)}
+            {group.rows.map(row => (
+              <ThreadRow
+                key={row.thread.id}
+                row={row}
+                nested={nested}
+                showProject={showProject}
+                selected={selected === row.thread.id}
+                onOpen={() => openThread(row.thread.id)}
+                onFold={onFold}
+              />
+            ))}
           </section>
         );
       })}
@@ -146,31 +173,53 @@ function ThreadList({ threads, scope, groupBy, filtered }: { threads: Thread[]; 
   );
 }
 
-function ThreadRow({ thread, showProject, selected, onOpen }: { thread: Thread; showProject: boolean; selected: boolean; onOpen: () => void }) {
-  const { index, workspace, now } = useApp();
+function ThreadRow({ row, nested, showProject, selected, onOpen, onFold }: {
+  row: TreeRow; nested: boolean; showProject: boolean; selected: boolean; onOpen: () => void; onFold: (id: Id) => void;
+}) {
+  const { thread } = row;
+  const { index, workspace, now, newThread } = useApp();
   const project = index.project.get(thread.projectId);
   const org = project && index.org.get(project.orgId);
   const next = nextTodo(index, thread.id);
   const stale = isStale(thread, workspace.settings, now);
   const overdue = !!next?.due && next.due < todayIso(now);
+  const openKids = (index.childrenOf.get(thread.id) ?? []).filter(isOpen).length;
   return (
-    <button data-thread={thread.id} className={`thread-row ${selected ? 'is-selected' : ''} is-${thread.state}`} onClick={onOpen}>
+    <button
+      data-thread={thread.id}
+      className={`thread-row ${selected ? 'is-selected' : ''} is-${thread.state}`}
+      onClick={onOpen}
+      aria-expanded={row.children ? !row.hidden : undefined}
+    >
       <span className="cell-priority"><PriorityIcon priority={thread.priority} /></span>
       <span className="cell-title">
+        {nested && <TreeLead row={row} onFold={onFold} />}
+        {row.detached && <TreePath path={ancestorsOf(index, thread)} />}
         <span className="truncate">{thread.title}</span>
+        {row.hidden > 0 && <em className="tree-hidden" title={`收起了 ${row.hidden} 条子策略线`}>+{row.hidden}</em>}
         {thread.tags.slice(0, 3).map(tag => <span key={tag} className="tag">{tag}</span>)}
+        {/* Inside the row button, so like the fold toggle it is a pointer shortcut; from the keyboard it is Shift+N. */}
+        <span
+          className="row-action"
+          aria-hidden="true"
+          title="新建子策略线（Shift+N）"
+          onClick={event => { event.stopPropagation(); newThread({ projectId: thread.projectId, parentId: thread.id, stage: thread.stage }); }}
+        >
+          <GitBranchPlus size={14} />
+        </span>
       </span>
       {showProject && (
         <span className="cell-project truncate">{org && <OrgMark org={org} />}<span className="truncate">{project?.name}</span></span>
       )}
-      <span className="cell-stage"><StageTrack stage={thread.stage} /><span>{STAGE_LABEL[thread.stage]}</span></span>
+      <span className="cell-stage"><StageLabel stage={thread.stage} /></span>
       <span className="cell-state">{thread.state === 'waiting' ? <span className="state-label is-waiting" title={thread.waitingOn}><StateLabel state="waiting" /></span> : <StateLabel state={thread.state} />}</span>
       <span className="cell-next">
         {next
           ? <><span className="truncate">{next.text}</span>{next.due && <time className={overdue ? 'is-overdue' : ''}>{dueLabel(next.due, now)}</time>}</>
           : thread.state === 'waiting'
             ? <span className="truncate muted">等 {thread.waitingOn || '外部条件'}</span>
-            : isOpen(thread) ? <span className="is-missing">缺少下一步</span> : <span className="muted">—</span>}
+            : thread.state === 'active' && openKids ? <span className="truncate muted">{openKids} 条子线在推进</span>
+            : thread.state === 'active' ? <span className="is-missing">缺少下一步</span> : <span className="muted">—</span>}
       </span>
       <span className={`cell-activity ${stale ? 'is-stale' : ''}`} title={`最近推进：${fullTime(thread.lastActivityAt)}`}>{relativeTime(thread.lastActivityAt, now)}</span>
     </button>
@@ -199,13 +248,15 @@ function Board({ threads, scope, projectId, onMove }: { threads: Thread[]; scope
             onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOver(null); }}
             onDrop={event => onDrop(event, stage)}
           >
-            <h3 className="board-head"><StageTrack stage={stage} /><span>{STAGE_LABEL[stage]}</span><em>{column.length}</em></h3>
+            <h3 className={`board-head stage-${stage}`}><StageIcon stage={stage} /><span>{STAGE_LABEL[stage]}</span><em>{column.length}</em></h3>
             <div className="board-cards">
               {column.map(thread => {
                 const project = index.project.get(thread.projectId);
                 const org = project && index.org.get(project.orgId);
                 const next = nextTodo(index, thread.id);
                 const stale = isStale(thread, workspace.settings, now);
+                const parent = parentOf(index, thread);
+                const kids = index.childrenOf.get(thread.id)?.length ?? 0;
                 return (
                   <button
                     key={thread.id}
@@ -214,14 +265,20 @@ function Board({ threads, scope, projectId, onMove }: { threads: Thread[]; scope
                     onDragStart={event => { event.dataTransfer.setData('application/x-threading-thread', thread.id); event.dataTransfer.effectAllowed = 'move'; }}
                     onClick={() => openThread(thread.id)}
                   >
+                    {parent && (
+                      <span className="board-card-parent" title={[...ancestorsOf(index, thread).map(item => item.title), thread.title].join(' / ')}>
+                        <CornerDownRight size={11} /><span className="truncate">{parent.title}</span>
+                      </span>
+                    )}
                     <span className="board-card-title">{thread.title}</span>
                     {scope === 'all' && project && <span className="board-card-project">{org && <OrgMark org={org} />}<span className="truncate">{project.name}</span></span>}
                     {next
                       ? <span className="board-card-next"><span className="truncate">{next.text}</span>{next.due && <time className={next.due < todayIso(now) ? 'is-overdue' : ''}>{dueLabel(next.due, now)}</time>}</span>
-                      : thread.state === 'active' && <span className="board-card-next is-missing">缺少下一步</span>}
+                      : needsNext(index, thread) && <span className="board-card-next is-missing">缺少下一步</span>}
                     <span className="board-card-foot">
                       <PriorityIcon priority={thread.priority} size={13} />
                       {thread.state !== 'active' && <StateLabel state={thread.state} />}
+                      {kids > 0 && <span className="board-card-kids" title={`${kids} 条子策略线`}><GitBranch size={12} />{kids}</span>}
                       {stale && <span className="is-stale">{daysSince(thread.lastActivityAt, now)} 天未推进</span>}
                     </span>
                   </button>

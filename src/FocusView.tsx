@@ -3,7 +3,7 @@ import { CircleAlert, Hourglass, Plus } from 'lucide-react';
 import { useApp } from './context';
 import { HEALTH_LABEL, daysSince, dueLabel, longToday, relativeTime, todayIso, waitedLabel } from './labels';
 import { EmptyState, HealthDot, OrgMark, PriorityIcon } from './ui';
-import type { Focus } from './workspace';
+import { parentOf, type Focus } from './workspace';
 import type { Thread } from './types';
 
 function Section({ title, hint, count, children }: { title: string; hint: string; count: number; children: ReactNode }) {
@@ -20,7 +20,13 @@ function Where({ thread }: { thread: Thread }) {
   const { index } = useApp();
   const project = index.project.get(thread.projectId);
   const org = project && index.org.get(project.orgId);
-  return <span className="focus-where">{org && <OrgMark org={org} />}{org?.code}<span className="crumb-sep">/</span>{project?.name}</span>;
+  const parent = parentOf(index, thread);
+  return (
+    <span className="focus-where">
+      {org && <OrgMark org={org} />}{org?.code}<span className="crumb-sep">/</span>{project?.name}
+      {parent && <><span className="crumb-sep">/</span>{parent.title}</>}
+    </span>
+  );
 }
 
 function AddNext({ thread }: { thread: Thread }) {

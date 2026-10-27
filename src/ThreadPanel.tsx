@@ -4,12 +4,12 @@ import { useApp } from './context';
 import { PRIORITIES, PRIORITY_LABEL, STATES, STATE_LABEL, fullTime, relativeTime, waitedLabel } from './labels';
 import { Composer, Timeline } from './Timeline';
 import Todos from './Todos';
-import { AutoTextarea, Dropdown, InlineEdit, Markdown, OrgMark, PriorityIcon, Segmented, StageTrack, StateIcon } from './ui';
-import { isStale } from './workspace';
+import { AutoTextarea, Dropdown, InlineEdit, Markdown, OrgMark, PriorityIcon, Segmented, StageIcon, StagePicker, StateIcon, StateLabel, TreeLead } from './ui';
+import { ancestorsOf, compareThreads, descendantsOf, isStale, threadTree } from './workspace';
 import type { Id, Metric, Thread, ThreadPatch } from './types';
 
 export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => void }) {
-  const { index, run, go, confirm, workspace, now } = useApp();
+  const { index, run, go, confirm, notify, openThread, newThread, workspace, now } = useApp();
   const thread = index.thread.get(id);
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => { if (body.current) body.current.scrollTop = 0; }, [id]);
@@ -19,30 +19,55 @@ export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => vo
   const entries = index.entriesOf.get(thread.id) ?? [];
   const patch = (value: ThreadPatch) => run(api => api.updateThread(thread.id, value));
   const stale = isStale(thread, workspace.settings, now);
+  const ancestors = ancestorsOf(index, thread);
+  const subtree = descendantsOf(index, thread.id);
   const projectOptions = index.orgs.flatMap(item => (index.projectsOf.get(item.id) ?? [])
     .filter(option => option.status !== 'archived' || option.id === thread.projectId)
     .map(option => ({ value: option.id, label: option.name, hint: item.code, icon: <OrgMark org={item} /> })));
-  const remove = () => confirm({
-    title: `删除策略线「${thread.title}」？`,
-    body: `它的 ${(index.todosOf.get(thread.id) ?? []).length} 条待办和 ${entries.length} 条记录会一起永久删除。只是不再推进的话，可以把状态改为「已结束」。`,
-    confirmLabel: '永久删除',
-    onConfirm: async () => { const change = await run(api => api.deleteThread(thread.id)); if (change) onClose(); },
-  });
+  // A line can go under any line of its project except itself and the lines below it.
+  const below = new Set([thread.id, ...subtree.map(item => item.id)]);
+  const parentOptions = [
+    { value: '', label: '无' },
+    ...threadTree([...(index.threadsOf.get(thread.projectId) ?? [])].sort(compareThreads))
+      .filter(row => !below.has(row.thread.id))
+      .map(row => ({ value: row.thread.id, label: row.thread.title, depth: row.depth, icon: <StageIcon stage={row.thread.stage} /> })),
+  ];
+  const move = async (projectId: Id) => {
+    const change = await run(api => api.updateThread(thread.id, { projectId }));
+    if (change && subtree.length) notify({ text: `已连同 ${subtree.length} 条子策略线移到「${index.project.get(projectId)?.name ?? ''}」` });
+  };
+  const remove = () => {
+    const lines = [thread, ...subtree];
+    const count = (of: Map<Id, unknown[]>) => lines.reduce((sum, line) => sum + (of.get(line.id)?.length ?? 0), 0);
+    const rows = `${count(index.todosOf)} 条待办和 ${count(index.entriesOf)} 条记录`;
+    confirm({
+      title: `删除策略线「${thread.title}」？`,
+      body: `${subtree.length ? `它的 ${subtree.length} 条子策略线，以及这些线的 ${rows}` : `它的 ${rows}`}会一起永久删除。只是不再推进的话，可以把状态改为「已结束」。`,
+      confirmLabel: '永久删除',
+      onConfirm: async () => { const change = await run(api => api.deleteThread(thread.id)); if (change) onClose(); },
+    });
+  };
 
   return (
     <aside className="panel" aria-label={`策略线：${thread.title}`}>
       <div className="panel-head">
-        <div className="panel-crumbs">
+        <nav className="panel-crumbs" aria-label="位置">
           {org && <button className="crumb" onClick={() => go({ kind: 'org', id: org.id })}><OrgMark org={org} />{org.code}</button>}
           <span className="crumb-sep">/</span>
           {project && <button className="crumb truncate" onClick={() => go({ kind: 'project', id: project.id })}>{project.name}</button>}
-        </div>
+          {ancestors.map(item => (
+            <span key={item.id} className="crumb-step">
+              <span className="crumb-sep">/</span>
+              <button className="crumb truncate" onClick={() => openThread(item.id)} title={item.title}>{item.title}</button>
+            </span>
+          ))}
+        </nav>
         <button className="icon-btn danger-hover" onClick={remove} aria-label="删除策略线" title="删除策略线"><Trash2 size={14} /></button>
         <button className="icon-btn" onClick={onClose} aria-label="关闭详情" title="关闭（Esc）"><X size={15} /></button>
       </div>
       <div className="panel-body" ref={body}>
         <InlineEdit className="panel-title" label="策略线名称" value={thread.title} maxLength={120} onCommit={title => void patch({ title })} />
-        <StageTrack stage={thread.stage} onChange={stage => void patch({ stage, hill: 0 })} size="lg" />
+        <StagePicker stage={thread.stage} onChange={stage => void patch({ stage, hill: 0 })} />
 
         <dl className="props">
           <dt>状态</dt>
@@ -74,7 +99,11 @@ export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => vo
           </dd>
           <dt>项目</dt>
           <dd>
-            <Dropdown label="所属项目" value={thread.projectId} onChange={projectId => void run(api => api.updateThread(thread.id, { projectId }))} options={projectOptions} />
+            <Dropdown label="所属项目" value={thread.projectId} onChange={projectId => void move(projectId)} options={projectOptions} />
+          </dd>
+          <dt>上级</dt>
+          <dd>
+            <Dropdown label="上级策略线" value={thread.parentId ?? ''} onChange={parentId => void patch({ parentId: parentId || null })} options={parentOptions} />
           </dd>
           <dt>山丘</dt>
           <dd><HillSlider thread={thread} /></dd>
@@ -90,6 +119,14 @@ export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => vo
         <section className="panel-section">
           <h3>下一步</h3>
           <Todos threadId={thread.id} />
+        </section>
+
+        <section className="panel-section">
+          <h3>子策略线{subtree.length > 0 && <em>{subtree.length}</em>}</h3>
+          <SubLines thread={thread} />
+          <button className="link-btn sub-line-add" onClick={() => newThread({ projectId: thread.projectId, parentId: thread.id, stage: thread.stage })}>
+            <Plus size={12} />新建子策略线
+          </button>
         </section>
 
         <section className="panel-section">
@@ -109,6 +146,28 @@ export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => vo
         </section>
       </div>
     </aside>
+  );
+}
+
+/** Every line below this one, drawn as the tree that hangs from it. */
+function SubLines({ thread }: { thread: Thread }) {
+  const { index, openThread, now } = useApp();
+  const rows = threadTree([thread, ...descendantsOf(index, thread.id).sort(compareThreads)]).slice(1);
+  if (!rows.length) return null;
+  return (
+    <ul className="sub-lines">
+      {rows.map(row => (
+        <li key={row.thread.id}>
+          <button className={`sub-line is-${row.thread.state}`} onClick={() => openThread(row.thread.id)}>
+            <TreeLead row={row} />
+            <StageIcon stage={row.thread.stage} />
+            <span className="truncate">{row.thread.title}</span>
+            {row.thread.state !== 'active' && <StateLabel state={row.thread.state} />}
+            <time title={`最近推进：${fullTime(row.thread.lastActivityAt)}`}>{relativeTime(row.thread.lastActivityAt, now)}</time>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

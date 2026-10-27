@@ -12,7 +12,7 @@ function StageSpread({ threads }: { threads: Thread[] }) {
       {STAGES.map(stage => {
         const count = threads.filter(thread => thread.stage === stage).length;
         return (
-          <span key={stage} className="spread-col" title={`${STAGE_LABEL[stage]}：${count} 条`}>
+          <span key={stage} className={`spread-col stage-${stage}`} title={`${STAGE_LABEL[stage]}：${count} 条`}>
             {Array.from({ length: Math.min(count, 4) }, (_, i) => <i key={i} />)}
             {count > 4 && <small>+{count - 4}</small>}
           </span>

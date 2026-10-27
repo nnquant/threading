@@ -1,14 +1,14 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { Building2, Crosshair, FolderKanban, ListTree, Plus, RotateCcw, Search, Settings } from 'lucide-react';
+import { Building2, Crosshair, FolderKanban, GitBranch, ListTree, Plus, RotateCcw, Search, Settings } from 'lucide-react';
 import { useApp } from './context';
 import { STAGE_LABEL, STATE_LABEL } from './labels';
-import { HealthDot, OrgMark, StageTrack } from './ui';
-import { matchesThread } from './workspace';
+import { HealthDot, OrgMark, StageIcon } from './ui';
+import { ancestorsOf, matchesThread } from './workspace';
 
 interface Item { id: string; group: string; label: string; detail?: string; icon: ReactNode; run: () => void }
 
 export default function CommandPalette({ onClose, onSettings }: { onClose: () => void; onSettings: () => void }) {
-  const { index, workspace, go, openThread, newThread, newProject, newOrg } = useApp();
+  const { index, workspace, selected, go, openThread, newThread, newProject, newOrg } = useApp();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const list = useRef<HTMLDivElement>(null);
@@ -16,8 +16,13 @@ export default function CommandPalette({ onClose, onSettings }: { onClose: () =>
   const items = useMemo<Item[]>(() => {
     const needle = query.trim().toLocaleLowerCase();
     const has = (...texts: (string | undefined)[]) => !needle || texts.some(text => text?.toLocaleLowerCase().includes(needle));
+    const open = selected ? index.thread.get(selected) : undefined;
     const actions: Item[] = [
       { id: 'new-thread', group: '操作', label: '新建策略线', detail: 'N', icon: <Plus size={14} />, run: () => newThread() },
+      ...(open ? [{
+        id: 'new-sub-thread', group: '操作', label: `在「${open.title}」下新建子策略线`, detail: 'Shift+N', icon: <GitBranch size={14} />,
+        run: () => newThread({ projectId: open.projectId, parentId: open.id, stage: open.stage }),
+      }] : []),
       { id: 'new-project', group: '操作', label: '新建项目', icon: <Plus size={14} />, run: () => newProject() },
       { id: 'new-org', group: '操作', label: '新建组织', icon: <Plus size={14} />, run: newOrg },
       { id: 'focus', group: '操作', label: '打开焦点', detail: 'Ctrl+1', icon: <Crosshair size={14} />, run: () => go({ kind: 'focus' }) },
@@ -32,10 +37,11 @@ export default function CommandPalette({ onClose, onSettings }: { onClose: () =>
       .map(thread => {
         const project = index.project.get(thread.projectId);
         const org = project && index.org.get(project.orgId);
+        const parent = ancestorsOf(index, thread).pop();
         return {
           id: thread.id, group: needle ? '策略线' : '最近推进的策略线', label: thread.title,
-          detail: `${org?.code ?? ''} / ${project?.name ?? ''}，${STAGE_LABEL[thread.stage]}${thread.state !== 'active' ? `，${STATE_LABEL[thread.state]}` : ''}`,
-          icon: <StageTrack stage={thread.stage} />, run: () => openThread(thread.id),
+          detail: `${[org?.code ?? '', project?.name ?? '', ...(parent ? [parent.title] : [])].join(' / ')}，${STAGE_LABEL[thread.stage]}${thread.state !== 'active' ? `，${STATE_LABEL[thread.state]}` : ''}`,
+          icon: <StageIcon stage={thread.stage} />, run: () => openThread(thread.id),
         };
       });
     const projects: Item[] = needle ? [...index.project.values()]
@@ -45,8 +51,9 @@ export default function CommandPalette({ onClose, onSettings }: { onClose: () =>
     const orgs: Item[] = needle ? index.orgs
       .filter(org => has(org.name, org.code))
       .map(org => ({ id: org.id, group: '组织', label: org.name, detail: org.code, icon: <OrgMark org={org} />, run: () => go({ kind: 'org', id: org.id }) })) : [];
-    return needle ? [...threads, ...projects, ...orgs, ...actions] : [...actions.slice(0, 3), ...threads, ...actions.slice(3)];
-  }, [query, workspace.threads, index, go, openThread, newThread, newProject, newOrg, onSettings]);
+    const creating = actions.filter(item => item.id.startsWith('new-')).length;
+    return needle ? [...threads, ...projects, ...orgs, ...actions] : [...actions.slice(0, creating), ...threads, ...actions.slice(creating)];
+  }, [query, workspace.threads, index, selected, go, openThread, newThread, newProject, newOrg, onSettings]);
 
   const choose = (item: Item | undefined) => { if (!item) return; onClose(); item.run(); };
   const scrollTo = (at: number) => list.current?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: 'nearest' });
