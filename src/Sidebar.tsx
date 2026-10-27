@@ -59,7 +59,7 @@ export default function Sidebar({ focus, reviewCount, onSettings }: { focus: Foc
                   <ChevronRight size={12} />
                 </button>
                 <button className="nav-link" onClick={() => go({ kind: 'org', id: org.id })}>
-                  <OrgMark org={org} /><span className="truncate">{org.name}</span><small>{org.code}</small>
+                  <OrgMark org={org} /><span className="truncate">{org.name}</span>{org.demo && <span className="pill">示例</span>}<small>{org.code}</small>
                 </button>
                 <button className="icon-btn icon-btn-sm nav-add" onClick={() => newProject(org.id)} aria-label={`在 ${org.name} 中新建项目`} title="新建项目"><Plus size={12} /></button>
               </div>

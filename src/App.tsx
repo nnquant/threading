@@ -151,6 +151,22 @@ export default function App() {
     if (isWindowChrome(event.target)) void appWindow.toggleMaximize();
   };
 
+  const addDemo = useCallback(async () => {
+    const { demoSeed } = await import('./demo');
+    const change = await run(api => api.importDemoData(demoSeed(Date.now())));
+    if (change) notify({ text: `已添加 ${change.organizations?.length ?? 0} 个示例组织` });
+  }, [run, notify]);
+  const clearDemo = useCallback(() => {
+    const demos = workspace?.organizations.filter(org => org.demo) ?? [];
+    if (!demos.length) { notify({ text: '没有示例数据' }); return; }
+    setConfirmRequest({
+      title: '清理示例数据？',
+      body: `将删除 ${demos.length} 个示例组织（${demos.map(org => org.name).join('、')}）及其下的全部项目、策略线、待办和记录，包括你在这些组织里新加的内容。其他数据不受影响。`,
+      confirmLabel: '清理示例数据',
+      onConfirm: async () => { if (await run(api => api.clearDemoData())) notify({ text: '已清理示例数据' }); },
+    });
+  }, [workspace, run, notify]);
+
   const context: AppContext | null = workspace && index && api ? {
     workspace, index, now, view, go, selected, api, run, notify, newThread,
     openThread: setSelected,
@@ -159,6 +175,8 @@ export default function App() {
     newOrg: () => setDialog({ kind: 'org' }),
     editOrg: id => setDialog({ kind: 'org', id }),
     confirm: setConfirmRequest,
+    addDemo: () => void addDemo(),
+    clearDemo,
   } : null;
 
   // "All threads" keeps paused and finished projects in view; only archived projects and organizations drop out.

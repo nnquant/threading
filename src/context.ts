@@ -34,6 +34,10 @@ export interface AppContext {
   newOrg: () => void;
   editOrg: (id: Id) => void;
   confirm: (request: ConfirmRequest) => void;
+  /** Adds the demo organizations with their history to the current data. Typed as ENABLE_SAMPLE_DATA in the search box. */
+  addDemo: () => void;
+  /** Asks, then removes every demo organization and everything under it. Typed as DISABLE_SAMPLE_DATA in the search box. */
+  clearDemo: () => void;
 }
 
 export const Ctx = createContext<AppContext | null>(null);

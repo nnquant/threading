@@ -34,6 +34,7 @@ export default function OrgView({ id }: { id: Id }) {
           <OrgMark org={org} />
           <h1>{org.name}</h1>
           <span className="view-code">{org.code}</span>
+          {org.demo && <span className="pill">示例</span>}
           {org.archived && <span className="pill">已归档</span>}
           <button className="icon-btn" onClick={() => editOrg(org.id)} aria-label="编辑组织" title="编辑组织"><Pencil size={13} /></button>
         </div>

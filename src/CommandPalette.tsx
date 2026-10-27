@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
-import { Building2, Crosshair, FolderKanban, GitBranch, ListTree, Plus, RotateCcw, Search, Settings } from 'lucide-react';
+import { Building2, Crosshair, FlaskConical, FolderKanban, GitBranch, ListTree, Plus, RotateCcw, Search, Settings, Trash2 } from 'lucide-react';
 import { useApp } from './context';
 import { STAGE_LABEL, STATE_LABEL } from './labels';
 import { HealthDot, OrgMark, StageIcon } from './ui';
@@ -7,13 +7,20 @@ import { ancestorsOf, matchesThread } from './workspace';
 
 interface Item { id: string; group: string; label: string; detail?: string; icon: ReactNode; run: () => void }
 
+// Sample data has no visible entry: typing one of these words in full is the only way to add or clear it.
+const ENABLE_SAMPLE_DATA = 'ENABLE_SAMPLE_DATA';
+const DISABLE_SAMPLE_DATA = 'DISABLE_SAMPLE_DATA';
+
 export default function CommandPalette({ onClose, onSettings }: { onClose: () => void; onSettings: () => void }) {
-  const { index, workspace, selected, go, openThread, newThread, newProject, newOrg } = useApp();
+  const { index, workspace, selected, go, openThread, newThread, newProject, newOrg, addDemo, clearDemo } = useApp();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const list = useRef<HTMLDivElement>(null);
 
   const items = useMemo<Item[]>(() => {
+    const word = query.trim().toUpperCase();
+    if (word === ENABLE_SAMPLE_DATA) return [{ id: 'add-demo', group: '命令', label: '添加示例数据', icon: <FlaskConical size={14} />, run: addDemo }];
+    if (word === DISABLE_SAMPLE_DATA) return [{ id: 'clear-demo', group: '命令', label: '清理示例数据', icon: <Trash2 size={14} />, run: clearDemo }];
     const needle = query.trim().toLocaleLowerCase();
     const has = (...texts: (string | undefined)[]) => !needle || texts.some(text => text?.toLocaleLowerCase().includes(needle));
     const open = selected ? index.thread.get(selected) : undefined;
@@ -53,7 +60,7 @@ export default function CommandPalette({ onClose, onSettings }: { onClose: () =>
       .map(org => ({ id: org.id, group: '组织', label: org.name, detail: org.code, icon: <OrgMark org={org} />, run: () => go({ kind: 'org', id: org.id }) })) : [];
     const creating = actions.filter(item => item.id.startsWith('new-')).length;
     return needle ? [...threads, ...projects, ...orgs, ...actions] : [...actions.slice(0, creating), ...threads, ...actions.slice(creating)];
-  }, [query, workspace.threads, index, selected, go, openThread, newThread, newProject, newOrg, onSettings]);
+  }, [query, workspace.threads, index, selected, go, openThread, newThread, newProject, newOrg, onSettings, addDemo, clearDemo]);
 
   const choose = (item: Item | undefined) => { if (!item) return; onClose(); item.run(); };
   const scrollTo = (at: number) => list.current?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: 'nearest' });

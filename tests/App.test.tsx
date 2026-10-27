@@ -161,6 +161,38 @@ describe('Threading', () => {
     expect(screen.queryByRole('button', { name: /^技术面趋势/ })).toBeNull();
   });
 
+  it('adds and clears the demo data only through words typed into the search box', async () => {
+    const user = await start();
+    const nav = screen.getByRole('navigation', { name: '导航' });
+    const search = async (text: string) => {
+      await user.click(screen.getByRole('button', { name: /搜索或跳转/ }));
+      await user.type(await screen.findByRole('combobox', { name: '搜索' }), text);
+    };
+    expect(within(nav).getAllByText('示例')).toHaveLength(3);
+    await user.click(within(nav).getByRole('button', { name: '设置' }));
+    expect(within(await screen.findByRole('dialog', { name: '设置' })).queryByText(/示例数据/)).toBeNull();
+    await user.keyboard('{Escape}');
+    await search('示例数据');
+    expect(screen.queryByRole('option', { name: /示例数据/ })).toBeNull();
+    await user.keyboard('{Escape}');
+
+    await search('DISABLE_SAMPLE_DATA');
+    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['清理示例数据']);
+    await user.keyboard('{Enter}');
+    const confirm = await screen.findByRole('dialog', { name: '清理示例数据？' });
+    expect(confirm.textContent).toContain('3 个示例组织（自营研究、澜湾资产、启明投顾）');
+    await user.click(within(confirm).getByRole('button', { name: '清理示例数据' }));
+    expect(await screen.findByText('从一个组织开始')).toBeTruthy();
+    expect(within(nav).queryByText('澜湾资产')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('已清理示例数据');
+    expect(screen.queryByRole('button', { name: /示例数据/ })).toBeNull();
+
+    await search('ENABLE_SAMPLE_DATA');
+    await user.keyboard('{Enter}');
+    expect(await within(nav).findByText('澜湾资产')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('已添加 3 个示例组织');
+  });
+
   it('shows a project with its threads, hill chart and activity', async () => {
     const user = await start();
     await user.click(within(screen.getByRole('navigation', { name: '导航' })).getByRole('button', { name: /中证 1000 指数增强/ }));
