@@ -1,16 +1,16 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { CircleAlert, Hourglass, Plus } from 'lucide-react';
+import { CalendarClock, CircleAlert, CircleDashed, Flag, Hourglass, Plus, Snail } from 'lucide-react';
 import { useApp } from './context';
 import { HEALTH_LABEL, daysSince, dueLabel, longToday, relativeTime, todayIso, waitedLabel } from './labels';
 import { EmptyState, HealthDot, OrgMark, PriorityIcon } from './ui';
 import { parentOf, type Focus } from './workspace';
 import type { Thread } from './types';
 
-function Section({ title, hint, count, children }: { title: string; hint: string; count: number; children: ReactNode }) {
+function Section({ title, count, icon, children }: { title: string; count: number; icon: ReactNode; children: ReactNode }) {
   if (!count) return null;
   return (
     <section className="focus-section">
-      <h2><span>{title}</span><em>{count}</em><small>{hint}</small></h2>
+      <h2><span className="focus-badge" aria-hidden="true">{icon}</span><span>{title}</span><em>{count}</em></h2>
       <ul>{children}</ul>
     </section>
   );
@@ -50,7 +50,7 @@ function AddNext({ thread }: { thread: Thread }) {
       autoFocus
       value={text}
       maxLength={500}
-      placeholder="下一步做什么？回车添加"
+      placeholder="下一步"
       aria-label={`${thread.title} 的下一步`}
       onChange={event => setText(event.target.value)}
       onBlur={() => void submit()}
@@ -82,22 +82,18 @@ export default function FocusView({ focus }: { focus: Focus }) {
         {wipLimit > 0 && focus.activeCount > wipLimit && (
           <div className="notice">
             <CircleAlert size={14} />
-            <span>同时进行的策略线有 {focus.activeCount} 条，超过了你设定的上限 {wipLimit} 条。挑几条改为「搁置」，剩下的推进得更快。</span>
+            <span>进行中 {focus.activeCount} 条，超过上限 {wipLimit} 条</span>
             <button className="link-btn" onClick={() => go({ kind: 'threads' })}>查看全部</button>
           </div>
         )}
         {index.orgs.length === 0 && (
-          <EmptyState title="从一个组织开始" action={<button className="btn btn-primary" onClick={newOrg}><Plus size={14} />新建组织</button>}>
-            Threading 按「组织 → 策略项目 → 策略线」组织工作。先添加一个客户、基金或你自己的自营研究。
-          </EmptyState>
+          <EmptyState title="从一个组织开始" action={<button className="btn btn-primary" onClick={newOrg}><Plus size={14} />新建组织</button>} />
         )}
         {index.orgs.length > 0 && total === 0 && (
-          <EmptyState title="没有需要处理的事" action={<button className="btn" onClick={() => newThread()}><Plus size={14} />新建策略线</button>}>
-            每条进行中的线都有下一步，没有逾期、停滞或等太久的事项。
-          </EmptyState>
+          <EmptyState title="没有需要处理的事" action={<button className="btn" onClick={() => newThread()}><Plus size={14} />新建策略线</button>} />
         )}
 
-        <Section title="下一步日程" hint="七天内到期" count={focus.due.length}>
+        <Section title="下一步日程" count={focus.due.length} icon={<CalendarClock size={14} />}>
           {focus.due.map(({ thread, todo }) => (
             <li key={todo.id} className={row(thread)}>
               <button className="todo-check" role="checkbox" aria-checked="false" onClick={() => void complete(todo.id, todo.text)} aria-label={`完成：${todo.text}`} />
@@ -110,7 +106,7 @@ export default function FocusView({ focus }: { focus: Focus }) {
           ))}
         </Section>
 
-        <Section title="等待中" hint="等的时间越长越该去催" count={focus.waiting.length}>
+        <Section title="等待中" count={focus.waiting.length} icon={<Hourglass size={14} />}>
           {focus.waiting.map(thread => (
             <li key={thread.id} className={row(thread)}>
               <Hourglass size={13} className="focus-icon" />
@@ -125,7 +121,7 @@ export default function FocusView({ focus }: { focus: Focus }) {
           ))}
         </Section>
 
-        <Section title="停滞" hint={`进行中，但超过 ${workspace.settings.staleDays} 天没有推进`} count={focus.stale.length}>
+        <Section title="停滞" count={focus.stale.length} icon={<Snail size={14} />}>
           {focus.stale.map(thread => (
             <li key={thread.id} className={row(thread)}>
               <PriorityIcon priority={thread.priority} size={13} />
@@ -138,7 +134,7 @@ export default function FocusView({ focus }: { focus: Focus }) {
           ))}
         </Section>
 
-        <Section title="缺少下一步" hint="进行中的线都应该有一个明确的下一步" count={focus.noNext.length}>
+        <Section title="缺少下一步" count={focus.noNext.length} icon={<CircleDashed size={14} />}>
           {focus.noNext.map(thread => (
             <li key={thread.id} className={row(thread)}>
               <PriorityIcon priority={thread.priority} size={13} />
@@ -151,7 +147,7 @@ export default function FocusView({ focus }: { focus: Focus }) {
           ))}
         </Section>
 
-        <Section title="需要关注的项目" hint="健康度为有风险或偏离" count={focus.risky.length}>
+        <Section title="需要关注的项目" count={focus.risky.length} icon={<Flag size={14} />}>
           {focus.risky.map(project => {
             const org = index.org.get(project.orgId);
             const update = (index.projectEntries.get(project.id) ?? []).find(entry => entry.kind === 'update');

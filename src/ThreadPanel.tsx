@@ -111,7 +111,7 @@ export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => vo
           <dd><Tags thread={thread} /></dd>
           <dt>推进</dt>
           <dd className="props-meta">
-            <span className={stale ? 'is-stale' : ''} title={fullTime(thread.lastActivityAt)}>最近推进 {relativeTime(thread.lastActivityAt, now)}</span>
+            <span className={stale ? 'is-stale' : ''} title={fullTime(thread.lastActivityAt)}>{relativeTime(thread.lastActivityAt, now)}</span>
             <span title={thread.reviewedAt ? fullTime(thread.reviewedAt) : undefined}>{thread.reviewedAt ? `回顾于 ${relativeTime(thread.reviewedAt, now)}` : '尚未回顾'}</span>
           </dd>
         </dl>
@@ -142,7 +142,7 @@ export default function ThreadPanel({ id, onClose }: { id: Id; onClose: () => vo
         <section className="panel-section">
           <h3>记录<em>{entries.filter(entry => entry.kind !== 'event').length}</em></h3>
           <Composer projectId={thread.projectId} threadId={thread.id} compact />
-          <Timeline entries={entries} empty="还没有记录。结果、决策和想法都记在这里，回头能看清这条线是怎么走过来的。" />
+          <Timeline entries={entries} />
         </section>
       </div>
     </aside>
@@ -288,7 +288,7 @@ function Metrics({ thread }: { thread: Thread }) {
       )}
       {rows.length < 12 && (
         <button className="link-btn metric-add" onClick={() => { editing.current = true; setRows([...rows, { label: '', value: '' }]); }}>
-          <Plus size={12} />{rows.length ? '添加指标' : '记录夏普、年化、回撤等关键指标'}
+          <Plus size={12} />添加指标
         </button>
       )}
     </div>
@@ -319,14 +319,13 @@ function Summary({ thread }: { thread: Thread }) {
           }}
         />
         <div className="composer-foot">
-          <span className="muted">支持 Markdown，Ctrl+Enter 保存</span>
           <button className="btn btn-ghost" onClick={() => setEditing(false)}>取消</button>
-          <button className="btn btn-primary" onClick={() => void save()}>保存</button>
+          <button className="btn btn-primary" title="Ctrl+Enter" onClick={() => void save()}>保存</button>
         </div>
       </div>
     );
   }
-  if (!thread.summary) return <button className="summary-empty" onClick={() => { setDraft(''); setEditing(true); }}>写下这条线的假设、范围和相关链接</button>;
+  if (!thread.summary) return <button className="summary-empty" onClick={() => { setDraft(''); setEditing(true); }}>添加说明</button>;
   return (
     <div className="summary" onDoubleClick={() => { setDraft(thread.summary); setEditing(true); }}>
       <Markdown text={thread.summary} />

@@ -48,7 +48,7 @@ export default function Sidebar({ focus, reviewCount, onSettings }: { focus: Foc
         <button className="icon-btn icon-btn-sm" onClick={newOrg} aria-label="新建组织" title="新建组织"><Plus size={13} /></button>
       </div>
       <div className="nav-tree">
-        {orgs.length === 0 && <button className="nav-empty" onClick={newOrg}>添加第一个组织，例如一个客户或你自己的自营研究。</button>}
+        {orgs.length === 0 && <button className="nav-empty" onClick={newOrg}>新建组织</button>}
         {orgs.map(org => {
           const projects = (index.projectsOf.get(org.id) ?? []).filter(project => showArchived || project.status !== 'archived');
           const folded = collapsed.has(org.id);

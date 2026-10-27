@@ -51,18 +51,17 @@ export function Composer({ projectId, threadId = null, compact = false }: { proj
         onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); void submit(); } }}
       />
       <div className="composer-foot">
-        <span className="muted">支持 Markdown，Ctrl+Enter 发布</span>
-        <button className="btn btn-primary" disabled={!body.trim() || busy} onClick={() => void submit()}>记录{KIND_LABEL[kind]}</button>
+        <button className="btn btn-primary" title="Ctrl+Enter" disabled={!body.trim() || busy} onClick={() => void submit()}>记录{KIND_LABEL[kind]}</button>
       </div>
     </div>
   );
 }
 
-export function Timeline({ entries, showThread = false, empty }: { entries: Entry[]; showThread?: boolean; empty: string }) {
+export function Timeline({ entries, showThread = false }: { entries: Entry[]; showThread?: boolean }) {
   const { run, now, index, openThread, confirm, openEditor } = useApp();
   const [editing, setEditing] = useState<Id | null>(null);
   const [draft, setDraft] = useState('');
-  if (!entries.length) return <p className="timeline-empty">{empty}</p>;
+  if (!entries.length) return null;
   const save = async (entry: Entry) => {
     if (!draft.trim()) return;
     if (draft.trim() !== entry.body) { const change = await run(api => api.updateEntry(entry.id, { body: draft })); if (!change) return; }
@@ -126,7 +125,6 @@ export function Timeline({ entries, showThread = false, empty }: { entries: Entr
                     }}
                   />
                   <div className="composer-foot">
-                    <span className="muted">Ctrl+Enter 保存，Esc 取消</span>
                     <button
                       className="icon-btn entry-expand"
                       aria-label="在编辑器中编辑"
@@ -136,7 +134,7 @@ export function Timeline({ entries, showThread = false, empty }: { entries: Entr
                       <Maximize2 size={14} />
                     </button>
                     <button className="btn btn-ghost" onClick={() => setEditing(null)}>取消</button>
-                    <button className="btn btn-primary" disabled={!draft.trim()} onClick={() => void save(entry)}>保存</button>
+                    <button className="btn btn-primary" title="Ctrl+Enter" disabled={!draft.trim()} onClick={() => void save(entry)}>保存</button>
                   </div>
                 </div>
               )

@@ -91,7 +91,7 @@ export function ThreadDialog({ preset, onClose }: { preset: NewThreadPreset; onC
         <div className="field"><span>优先级</span>
           <Segmented<Priority> label="优先级" value={priority} onChange={setPriority} options={PRIORITIES.map(value => ({ value, label: PRIORITY_LABEL[value], icon: <PriorityIcon priority={value} size={12} /> }))} />
         </div>
-        <Field label="下一步" hint="可选">
+        <Field label="下一步">
           <input value={nextAction} onChange={event => setNextAction(event.target.value)} maxLength={500} placeholder="接下来要做的第一件具体的事" />
         </Field>
         <div className="dialog-foot">
@@ -140,7 +140,7 @@ export function ProjectDialog({ id, orgId, onClose }: { id?: Id; orgId?: Id; onC
     });
   };
   return (
-    <Dialog title={existing ? '编辑项目' : '新建项目'} subtitle={existing ? undefined : '为一个组织做的一件事，下面再分出多条策略线'} onClose={onClose}>
+    <Dialog title={existing ? '编辑项目' : '新建项目'} onClose={onClose}>
       <form className="dialog-body" onSubmit={submit}>
         <FormError error={error} />
         <Field label="名称">
@@ -151,11 +151,11 @@ export function ProjectDialog({ id, orgId, onClose }: { id?: Id; orgId?: Id; onC
             {orgs.map(org => <option key={org.id} value={org.id}>{org.name}（{org.code}）</option>)}
           </select>
         </Field>
-        <Field label="目标" hint="可选，支持 Markdown">
-          <textarea rows={3} value={form.goal} onChange={event => set({ goal: event.target.value })} maxLength={2000} placeholder="做成什么样算完成？例如：年化超额 8%，跟踪误差 5% 以内" />
+        <Field label="目标">
+          <textarea rows={3} value={form.goal} onChange={event => set({ goal: event.target.value })} maxLength={2000} placeholder="例如：年化超额 8%，跟踪误差 5% 以内" />
         </Field>
         <div className="field-row">
-          <Field label="目标日期" hint="可选">
+          <Field label="目标日期">
             <input type="date" value={form.targetDate} onChange={event => set({ targetDate: event.target.value })} />
           </Field>
           {existing && (
@@ -204,14 +204,14 @@ export function OrgDialog({ id, onClose }: { id?: Id; onClose: () => void }) {
     });
   };
   return (
-    <Dialog title={existing ? '编辑组织' : '新建组织'} subtitle={existing ? undefined : '一个客户、基金或你自己的自营研究'} onClose={onClose}>
+    <Dialog title={existing ? '编辑组织' : '新建组织'} onClose={onClose}>
       <form className="dialog-body" onSubmit={submit}>
         <FormError error={error} />
         <div className="field-row">
           <Field label="名称">
             <input data-autofocus value={form.name} onChange={event => set({ name: event.target.value })} maxLength={60} placeholder="例如：澜湾资产" required />
           </Field>
-          <Field label="简称" hint="最多 6 字">
+          <Field label="简称">
             <input value={form.code} onChange={event => set({ code: event.target.value.toUpperCase() })} maxLength={6} placeholder={[...form.name.trim()].slice(0, 2).join('').toUpperCase() || 'LW'} />
           </Field>
         </div>
@@ -222,13 +222,13 @@ export function OrgDialog({ id, onClose }: { id?: Id; onClose: () => void }) {
             ))}
           </div>
         </div>
-        <Field label="备注" hint="可选，支持 Markdown">
+        <Field label="备注">
           <textarea rows={3} value={form.note} onChange={event => set({ note: event.target.value })} maxLength={2000} placeholder="联系人、合作方式、费用结构……" />
         </Field>
         {existing && (
           <label className="check-toggle">
             <input type="checkbox" checked={form.archived} onChange={event => set({ archived: event.target.checked })} />
-            归档：从侧边栏、焦点和回顾中隐藏，数据保留
+            归档
           </label>
         )}
         <div className="dialog-foot">
@@ -282,14 +282,12 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             <input type="number" min={0} max={50} value={wipLimit} onChange={event => setWipLimit(event.target.value)} />
           </Field>
         </div>
-        <p className="hint">进行中的策略线超过停滞天数没有推进，会出现在焦点的「停滞」里；同时进行的线超过上限时，焦点会提醒你先搁置一些。</p>
         <div className="field"><span>数据文件</span>
           <div className="data-path">
             <code title={workspace.dataPath}>{workspace.dataPath}</code>
             {isDesktop && <button type="button" className="icon-btn" onClick={() => void desktop.revealPath(workspace.dataPath)} aria-label="在文件夹中显示" title="在文件夹中显示"><FolderOpen size={14} /></button>}
           </div>
         </div>
-        <p className="hint">每天第一次打开时自动备份到数据目录的 backups 文件夹，保留最近 14 份。</p>
         <div className="dialog-foot">
           {isDesktop && <button type="button" className="btn btn-ghost" disabled={backingUp} onClick={() => void backup()}><HardDriveDownload size={14} />立即备份</button>}
           <button type="button" className="btn" onClick={onClose}>取消</button>

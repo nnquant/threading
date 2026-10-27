@@ -24,7 +24,7 @@ const sectionHeading = (title: string) => screen.queryByRole('heading', { name: 
 describe('Threading', () => {
   it('opens on focus with what needs attention across organizations', async () => {
     await start();
-    expect(screen.getByText('当前为浏览器预览，使用演示数据，改动只保存在本浏览器。请运行 Threading 桌面客户端管理真实数据。')).toBeTruthy();
+    expect(screen.getByText('浏览器预览，改动只保存在本浏览器')).toBeTruthy();
     expect(within(section('下一步日程')).getByText('补 2015–2017 年样本外回测')).toBeTruthy();
     expect(within(section('下一步日程')).getByText('逾期 1 天')).toBeTruthy();
     expect(within(section('等待中')).getByText('数据组补齐 2019 年分钟数据')).toBeTruthy();
@@ -210,7 +210,9 @@ describe('Threading', () => {
     await user.type(screen.getByRole('textbox', { name: '记录内容' }), '回撤原因找到了，是小盘因子暴露。');
     await user.click(screen.getByRole('radio', { name: '正常' }));
     await user.click(screen.getByRole('button', { name: '记录进展' }));
-    expect(await screen.findByText('回撤原因找到了，是小盘因子暴露。')).toBeTruthy();
+    // In the timeline, and as the latest update under the goal
+    expect(await within(screen.getByRole('main')).findAllByText('回撤原因找到了，是小盘因子暴露。')).toHaveLength(2);
+    expect(screen.getByText('回撤原因找到了，是小盘因子暴露。', { selector: '.brief-update-body' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '健康度：正常' })).toBeTruthy();
   });
 

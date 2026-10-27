@@ -45,7 +45,7 @@ export default function OrgView({ id }: { id: Id }) {
       {org.note && <div className="project-brief"><Markdown text={org.note} className="project-goal" /></div>}
       <div className="view-body">
         {projects.length === 0
-          ? <EmptyState title="还没有策略项目" action={<button className="btn btn-primary" onClick={() => newProject(org.id)}><Plus size={14} />新建项目</button>}>项目是你为这个组织做的一件事，比如一个指数增强产品或一套 CTA 组合，下面再分出多条策略线。</EmptyState>
+          ? <EmptyState title="还没有策略项目" action={<button className="btn btn-primary" onClick={() => newProject(org.id)}><Plus size={14} />新建项目</button>} />
           : (
             <div className="project-list">
               <div className="project-row project-row-head" aria-hidden="true">

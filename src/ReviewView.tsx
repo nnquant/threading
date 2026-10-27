@@ -31,7 +31,7 @@ export default function ReviewView() {
               ? <button className="btn" onClick={() => setSkipped(new Set())}>重新看跳过的 {queue.length} 条</button>
               : <button className="btn" onClick={() => go({ kind: 'focus' })}>回到焦点</button>}
           >
-            {reviewed > 0 ? `本次回顾了 ${reviewed} 条策略线。` : '最近六天内所有进行中和等待中的策略线都回顾过了。'}
+            {reviewed > 0 && `本次回顾了 ${reviewed} 条`}
           </EmptyState>
         </div>
       </div>
@@ -67,7 +67,6 @@ export default function ReviewView() {
             <PriorityIcon priority={thread.priority} />
             <InlineEdit className="panel-title" label="策略线名称" value={thread.title} maxLength={120} onCommit={title => void run(api => api.updateThread(thread.id, { title }))} />
           </div>
-          <p className="review-prompt">它还值得推进吗？现在在哪个阶段、山丘的哪一侧？下一步是否明确到可以直接动手？</p>
           <StagePicker stage={thread.stage} onChange={stage => void run(api => api.updateThread(thread.id, { stage, hill: 0 }))} />
           <dl className="props">
             <dt>状态</dt>
@@ -90,7 +89,7 @@ export default function ReviewView() {
           <section className="panel-section">
             <h3>最近记录</h3>
             <Composer projectId={thread.projectId} threadId={thread.id} compact />
-            <Timeline entries={recent} empty="这条线还没有记录。" />
+            <Timeline entries={recent} />
           </section>
         </article>
         <div className="review-actions">

@@ -175,8 +175,8 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
 }
 
 /** Modal frame with Escape to close and focus kept inside. */
-export function Dialog({ title, subtitle, onClose, children, className = '', wide = false }: {
-  title: string; subtitle?: string; onClose: () => void; children: ReactNode; className?: string; wide?: boolean;
+export function Dialog({ title, onClose, children, className = '', wide = false }: {
+  title: string; onClose: () => void; children: ReactNode; className?: string; wide?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -200,10 +200,7 @@ export function Dialog({ title, subtitle, onClose, children, className = '', wid
     <div className="backdrop" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div className={`dialog ${wide ? 'is-wide' : ''} ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} onKeyDown={onKey}>
         <div className="dialog-head">
-          <div>
-            <h2 id={titleId}>{title}</h2>
-            {subtitle && <p>{subtitle}</p>}
-          </div>
+          <h2 id={titleId}>{title}</h2>
           <button type="button" className="icon-btn dialog-close" onClick={onClose} aria-label="关闭"><X size={15} /></button>
         </div>
         {children}

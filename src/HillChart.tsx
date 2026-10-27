@@ -5,7 +5,7 @@ import { EmptyState, textWidth } from './ui';
 import type { Id, Thread } from './types';
 
 const W = 760;
-const H = 280;
+const H = 256;
 const LEFT = 36;
 const RIGHT = W - 36;
 const BASE = 214;
@@ -21,7 +21,7 @@ export default function HillChart({ threads }: { threads: Thread[] }) {
   const svg = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<{ id: Id; hill: number; moved: boolean; startX: number } | null>(null);
   const open = threads.filter(thread => thread.state !== 'closed');
-  if (!open.length) return <EmptyState title="没有进行中的策略线">新建或恢复一条策略线后，它会出现在山丘上。</EmptyState>;
+  if (!open.length) return <EmptyState title="没有进行中的策略线" />;
 
   const toHill = (event: ReactPointerEvent) => {
     const matrix = svg.current?.getScreenCTM();
@@ -72,8 +72,6 @@ export default function HillChart({ threads }: { threads: Thread[] }) {
         <path className="hill-curve" d={CURVE} />
         <text className="hill-caption" x={xAt(25)} y={BASE + 30} textAnchor="middle">摸索中</text>
         <text className="hill-caption" x={xAt(75)} y={BASE + 30} textAnchor="middle">推进中</text>
-        <text className="hill-note" x={xAt(25)} y={BASE + 48} textAnchor="middle">还有没想清楚的问题</text>
-        <text className="hill-note" x={xAt(75)} y={BASE + 48} textAnchor="middle">方法已确定，只剩执行</text>
         {dots.map(({ thread, hill, x, y, lx, ly, anchor }) => (
           <g
             key={thread.id}
@@ -104,7 +102,6 @@ export default function HillChart({ threads }: { threads: Thread[] }) {
           </g>
         ))}
       </svg>
-      <p className="hint hill-hint">拖动圆点更新位置，点击打开策略线。空心圆点表示等待或搁置中的线。</p>
     </div>
   );
 }

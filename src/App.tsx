@@ -300,7 +300,7 @@ export default function App() {
     return (
       <div className="view">
         <header className="view-head">
-          <div className="view-title"><h1>全部策略线</h1><span className="view-date">{listedThreads.filter(thread => thread.state !== 'closed').length} 条未结束</span></div>
+          <div className="view-title"><h1>全部策略线</h1></div>
           <div className="view-actions"><button className="btn btn-primary" onClick={() => newThread()}><Plus size={14} />新建策略线</button></div>
         </header>
         <div className="view-body"><ThreadsView threads={listedThreads} scope="all" /></div>
@@ -343,7 +343,7 @@ export default function App() {
         )}
       </header>
 
-      {!isDesktop && <div className="banner"><CircleAlert size={13} />当前为浏览器预览，使用演示数据，改动只保存在本浏览器。请运行 Threading 桌面客户端管理真实数据。</div>}
+      {!isDesktop && <div className="banner"><CircleAlert size={13} />浏览器预览，改动只保存在本浏览器</div>}
 
       {context && focus ? (
         <Ctx.Provider value={context}>

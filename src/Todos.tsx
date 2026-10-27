@@ -75,7 +75,7 @@ export default function Todos({ threadId, autoFocus = false }: { threadId: Id; a
           autoFocus={autoFocus}
           onChange={event => setText(event.target.value)}
           onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void add(); } }}
-          placeholder={open.length ? '添加下一步，回车确认' : '这条线的下一步是什么？'}
+          placeholder="添加下一步"
           aria-label="添加下一步"
           maxLength={500}
         />

@@ -84,9 +84,7 @@ export default function ThreadsView({ threads, scope, projectId }: { threads: Th
           <EmptyState
             title={scope === 'project' ? '这个项目还没有策略线' : '还没有策略线'}
             action={<button className="btn btn-primary" onClick={() => newThread({ projectId })}><Plus size={14} />新建策略线</button>}
-          >
-            每条策略线是项目里一条独立推进的研究或交易线，例如一个因子、一个模型或一次实盘迭代。
-          </EmptyState>
+          />
         )
         : prefs.layout === 'board'
           ? <Board threads={visible} scope={scope} projectId={projectId} onMove={moveStage} />
@@ -130,7 +128,7 @@ function ThreadList({ threads, scope, groupBy, filtered, collapsed, onFold }: {
       listRef.current?.querySelector<HTMLElement>(`[data-thread="${step.select}"]`)?.focus();
     }
   };
-  if (!threads.length) return <EmptyState title={filtered ? '没有匹配的策略线' : '没有进行中的策略线'}>{filtered ? '换个关键词试试。' : '已结束的策略线可以通过上方的开关显示。'}</EmptyState>;
+  if (!threads.length) return <EmptyState title={filtered ? '没有匹配的策略线' : '没有进行中的策略线'} />;
   return (
     <div className={`thread-list ${showProject ? 'is-all' : 'is-project'}`} ref={listRef} onKeyDown={onKeyDown}>
       <div className="thread-head" aria-hidden="true">
