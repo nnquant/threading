@@ -1,4 +1,5 @@
 mod backup;
+mod images;
 mod models;
 mod store;
 
@@ -182,6 +183,26 @@ async fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
     .await
 }
 
+#[tauri::command]
+async fn save_image(state: State<'_, AppState>, data: String) -> Result<ImageRef, String> {
+    let data_path = state.data_path.clone();
+    tauri::async_runtime::spawn_blocking(move || images::save(&data_path, &data))
+        .await
+        .map_err(|_| "无法保存图片。".to_string())?
+}
+
+#[tauri::command]
+async fn read_image(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<tauri::ipc::Response, String> {
+    let data_path = state.data_path.clone();
+    tauri::async_runtime::spawn_blocking(move || images::read(&data_path, &id))
+        .await
+        .map_err(|_| "图片数据无法读取。".to_string())?
+        .map(tauri::ipc::Response::new)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -234,6 +255,8 @@ fn command_handler<R: tauri::Runtime>(
         backup_now,
         import_demo_data,
         clear_demo_data,
+        save_image,
+        read_image,
     ]
 }
 

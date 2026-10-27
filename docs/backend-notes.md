@@ -4,7 +4,7 @@
 
 ## 命令与存储
 
-已注册契约中的全部 21 个异步命令，参数名和 JSON 字段名保持一致：
+已注册契约中的全部 23 个异步命令，参数名和 JSON 字段名保持一致：
 
 - `load_workspace`
 - `create_organization`、`update_organization`、`delete_organization`
@@ -14,8 +14,9 @@
 - `create_entry`、`update_entry`、`delete_entry`
 - `reorder`、`update_settings`、`backup_now`
 - `import_demo_data`、`clear_demo_data`
+- `save_image`、`read_image`
 
-命令在 `spawn_blocking` 工作线程中持有连接互斥锁。每次变更在 SQLite IMMEDIATE 事务内读取快照、校验、应用业务规则、计算完整 Change、保存和提交；提交失败不会返回成功 Change。即使时间戳恰好相同，也显式返回被触及的策略线等行。工作区读取使用独立读事务，保证多个表来自同一个快照。
+数据库命令在 `spawn_blocking` 工作线程中持有连接互斥锁；图片命令在独立阻塞任务中读写文件，不获取数据库锁。每次数据库变更在 SQLite IMMEDIATE 事务内读取快照、校验、应用业务规则、计算完整 Change、保存和提交；提交失败不会返回成功 Change。即使时间戳恰好相同，也显式返回被触及的策略线等行。工作区读取使用独立读事务，保证多个表来自同一个快照。
 
 数据库为应用数据目录下的 `threading.db`，支持 `THREADING_DATA_DIR`。相对覆盖目录会解析为绝对路径；空环境变量视为未设置。启用 WAL、外键、5 秒忙等待；当前 `user_version = 3`，拒绝打开更高版本，避免旧程序误写新库。`schema.sql` 保留版本 1 定义，版本 2 在迁移事务中追加 `organizations.demo INTEGER NOT NULL DEFAULT 0`，版本 3 追加子策略线关联，详见下文。全新数据库依次执行三次迁移。条目使用可延迟检查的复合外键，保证移动后项目与策略线一致。
 
@@ -157,3 +158,33 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D w
 ```
 
 上述两条验收命令均退出 0：40 项测试通过，0 失败、0 忽略，Clippy 无警告；cargo fmt --check 与范围内 git diff --check 也通过。
+
+## Markdown 图片（2026-10-27）
+
+新增 `src-tauri/src/images.rs`，在 models 中增加与前端一致的 `ImageRef { id, mime, size }`。`save_image(data: String)` 和 `read_image(id: String)` 均为 async，已加入同一 `generate_handler!`；复制 `AppState.data_path` 后直接进入 `spawn_blocking`，不读写数据库、不获取连接锁、不返回 Change。
+
+图片目录沿用备份的推导方式：数据库文件父目录下的 `images/`，因此自然遵守启动时解析的 `THREADING_DATA_DIR`。保存时用标准 RFC 4648 字母表解码，支持带或不带 `=` 填充，拒绝 data URL、空白、换行和 URL-safe 字母表；按解码后字节数检查空内容和 10 × 1024 × 1024 上限。只依据契约列出的 PNG/JPEG/GIF87a/GIF89a/WebP 文件头识别格式，不做完整图像解码。文件名使用小写 UUID v4，加 `png` / `jpg` / `gif` / `webp` 扩展名；同目录独立临时文件以 `create_new` 创建，写入、`sync_all`、关闭句柄后重命名，失败清理临时文件。再次保存相同内容也得到新 id。
+
+读取前逐字节检查原始 id，严格等价于契约正则：固定 UUID 分段、小写 ASCII 十六进制和四种扩展名，不 trim、不解析后规范化，也不附加正则之外的 UUID 版本约束。成功通过 `tauri::ipc::Response` 发送原始字节。条目/策略线删除和示例清理不删除图片；JSON 备份仍保存正文引用，不嵌入图片。CSP 仅在 `img-src` 增加 `blob: https:`，其余配置不变。
+
+新增直接依赖 `base64 = "0.23"`，实际锁定 **0.23.1**；该版本原已作为间接依赖存在，因此 Cargo.lock 仅增加 threading 的依赖引用，没有升级其他包。
+
+错误信息原文：
+
+- `save_image`：`图片数据无法读取。`、`图片是空的。`、`图片不能超过 10 MB。`、`只支持 PNG、JPEG、GIF 和 WebP 图片。`、`无法保存图片。`
+- `read_image`：`图片地址无效。`、`找不到这张图片，可能已被删除。`；契约未单列的其他读取 I/O 失败沿用 `图片数据无法读取。`。
+- 阻塞任务异常：保存返回 `无法保存图片。`，读取返回 `图片数据无法读取。`，不向前端附加底层错误或路径。
+
+新增 8 项 Rust 测试，覆盖四种格式（包括两个 GIF 文件头）的命名/MIME/大小/字节往返、内容识别、重复保存、带/不带填充、非法 base64、空内容、不支持及截断文件头、10 MB − 1 / 10 MB / 10 MB + 1 边界、路径穿越/盘符/大小写/空白/换行/非 ASCII/额外扩展名/NTFS stream 等 id 拒绝路径、文件缺失、目录创建失败、重命名失败后的临时文件清理、删除和示例清理后图片保留，以及 CSP 完整匹配。
+
+真实 Tauri mock IPC 测试沿用生产 `command_handler()`，按 `{ data }` / `{ id }` 调用两个命令，并在持有数据库锁时完成全部请求，验证不依赖数据库锁；对 `read_image` 明确匹配 `InvokeResponseBody::Raw` 并逐字节比较，拒绝 JSON 包装。测试目录仅使用 `src-tauri/work/rust-test-<UUID>/` 并继承 ACL。
+
+本次验收先运行不带 `--locked` 的测试更新锁文件，再执行以下三条最终命令，退出码均为 0：
+
+```powershell
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --locked --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target/codex
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --target-dir src-tauri/target/codex -- -D warnings
+```
+
+总计 **48 项测试通过**（新增 8 项），0 失败、0 忽略；Clippy 无警告。本次改动文件为 `src-tauri/src/images.rs`、`src-tauri/src/lib.rs`、`src-tauri/src/models.rs`、`src-tauri/src/tests.rs`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json` 和本文档。未修改前端或根目录测试，未结束任何进程，未访问真实用户数据库；未进行桌面编辑器交互验证。

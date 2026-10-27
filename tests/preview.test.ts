@@ -190,4 +190,27 @@ describe('preview store', () => {
     seed.threads[0] = { ...term, parentId: ferrous.id };
     await expect(api.importDemoData(seed)).rejects.toThrow('示例策略线的上级不能成环。');
   });
+
+  it('saves images by their content and reads them back', async () => {
+    const { api } = await setup();
+    const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3));
+    const saved = await api.saveImage(png);
+    expect(saved).toMatchObject({ mime: 'image/png', size: 11 });
+    expect(saved.id).toMatch(/^[0-9a-f-]{36}\.png$/);
+    expect([...new Uint8Array(await api.readImage(saved.id))].slice(0, 4)).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    // A WebP is recognised by its header, whatever the caller thinks it is.
+    expect((await api.saveImage(btoa('RIFF\0\0\0\0WEBPVP8 '))).mime).toBe('image/webp');
+    // Stored ones survive a new session of the preview.
+    expect((await createPreviewApi().readImage(saved.id)).byteLength).toBe(11);
+  });
+
+  it('rejects images it cannot use', async () => {
+    const { api } = await setup();
+    await expect(api.saveImage('not base64!')).rejects.toThrow('图片数据无法读取。');
+    await expect(api.saveImage('')).rejects.toThrow('图片是空的。');
+    await expect(api.saveImage(btoa('%PDF-1.7'))).rejects.toThrow('只支持 PNG、JPEG、GIF 和 WebP 图片。');
+    await expect(api.readImage('../threading.db')).rejects.toThrow('图片地址无效。');
+    await expect(api.readImage('3F2A9C1E-8B7D-4E6F-A1B2-C3D4E5F60789.png')).rejects.toThrow('图片地址无效。');
+    await expect(api.readImage('3f2a9c1e-8b7d-4e6f-a1b2-c3d4e5f60789.png')).rejects.toThrow('找不到这张图片，可能已被删除。');
+  });
 });

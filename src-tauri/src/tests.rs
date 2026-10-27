@@ -6,11 +6,12 @@ use std::{
 };
 
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::NaiveDate;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
-use crate::{backup, decode, models::*, store};
+use crate::{backup, decode, images, models::*, store};
 
 #[test]
 fn main_window_preserves_html5_drag_and_drop() {
@@ -2703,4 +2704,299 @@ fn collection_name(kind: &str) -> String {
     } else {
         format!("{kind}s")
     }
+}
+
+fn image_samples() -> Vec<(&'static [u8], &'static str, &'static str)> {
+    vec![
+        (b"\x89PNG\r\n\x1a\n\0\xff.jpg", "png", "image/png"),
+        (b"\xff\xd8\xff\0.png", "jpg", "image/jpeg"),
+        (b"GIF87a\0\xff.webp", "gif", "image/gif"),
+        (b"GIF89a\0\xff.jpg", "gif", "image/gif"),
+        (b"RIFF\x08\0\0\0WEBP\0\xff.gif", "webp", "image/webp"),
+    ]
+}
+
+#[test]
+fn images_save_headers_and_read_exact_bytes_without_database() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("threading.db");
+    let mut names = HashSet::new();
+    for (bytes, ext, mime) in image_samples() {
+        let reference = images::save(&path, &STANDARD.encode(bytes)).unwrap();
+        let (uuid, actual_ext) = reference.id.split_once('.').unwrap();
+        let parsed = uuid::Uuid::parse_str(uuid).unwrap();
+        assert_eq!(parsed.get_version_num(), 4);
+        assert_eq!(parsed.hyphenated().to_string(), uuid);
+        assert_eq!(actual_ext, ext);
+        assert_eq!(reference.mime, mime);
+        assert_eq!(reference.size, bytes.len());
+        assert_eq!(images::read(&path, &reference.id).unwrap(), bytes);
+        assert_eq!(
+            fs::read(scratch.0.join("images").join(&reference.id)).unwrap(),
+            bytes
+        );
+        assert!(names.insert(reference.id));
+        // Repeated saves create new immutable files, including with omitted padding.
+        let repeated = images::save(&path, STANDARD.encode(bytes).trim_end_matches('=')).unwrap();
+        assert!(names.insert(repeated.id));
+    }
+    let actual: HashSet<_> = fs::read_dir(scratch.0.join("images"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(actual, names);
+    assert!(!path.exists());
+}
+
+#[test]
+fn images_reject_bad_base64_empty_and_unsupported_headers() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("threading.db");
+    for data in [
+        "!",
+        "a",
+        "Zg===",
+        "Zh==",
+        "=Zg=",
+        "_9j_",
+        "data:image/png;base64,iVBORw==",
+        "R0lGODdh\n",
+        " R0lGODdh",
+        "R0lGODdh ",
+    ] {
+        assert_eq!(
+            images::save(&path, data).unwrap_err(),
+            "图片数据无法读取。",
+            "{data:?}"
+        );
+    }
+    assert_eq!(images::save(&path, "").unwrap_err(), "图片是空的。");
+    for bytes in [
+        b"ordinary.png".as_slice(),
+        b"\x89PNG\r\n\x1a",
+        b"\xff\xd8",
+        b"GIF88a",
+        b"RIFF\0\0\0\0WEB",
+        b"RIFF\0\0\0\0WAVE",
+        b"xxxx\0\0\0\0WEBP",
+        b"<svg></svg>",
+    ] {
+        assert_eq!(
+            images::save(&path, &STANDARD.encode(bytes)).unwrap_err(),
+            "只支持 PNG、JPEG、GIF 和 WebP 图片。"
+        );
+    }
+    assert!(!scratch.0.join("images").exists());
+}
+
+#[test]
+fn images_enforce_exact_ten_mb_decoded_boundary() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("threading.db");
+    let mut bytes = vec![0; 10 * 1024 * 1024 - 1];
+    bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    for _ in 0..2 {
+        let reference = images::save(&path, &STANDARD.encode(&bytes)).unwrap();
+        assert_eq!(reference.size, bytes.len());
+        assert_eq!(images::read(&path, &reference.id).unwrap(), bytes);
+        bytes.push(0);
+    }
+    assert_eq!(
+        images::save(&path, &STANDARD.encode(bytes)).unwrap_err(),
+        "图片不能超过 10 MB。"
+    );
+    assert_eq!(fs::read_dir(scratch.0.join("images")).unwrap().count(), 2);
+}
+
+#[test]
+fn images_reject_noncanonical_ids_before_filesystem_access() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("threading.db");
+    let reference = images::save(&path, &STANDARD.encode(b"GIF89a")).unwrap();
+    let id = &reference.id;
+    let invalid = vec![
+        String::new(),
+        "..".into(),
+        format!("../{id}"),
+        format!("..\\{id}"),
+        format!("images/{id}"),
+        format!("images\\{id}"),
+        format!("/{id}"),
+        format!("C:{id}"),
+        format!("C:\\{id}"),
+        format!("\\\\server\\share\\{id}"),
+        id.to_uppercase(),
+        id.replace(".gif", ".GIF"),
+        format!(" {id}"),
+        format!("{id} "),
+        format!("{id}\n"),
+        format!("{id}\r\n"),
+        format!("{id}\0"),
+        format!("{id}.png"),
+        id.replace('-', ""),
+        id.replace('-', "_"),
+        id.replace(".gif", ".jpeg"),
+        id.replace(".gif", ".svg"),
+        format!("g{}", &id[1..]),
+        format!("é{}", &id[1..]),
+        format!("%2e%2e%2f{id}"),
+        format!("{id}:stream"),
+        format!("{id}."),
+    ];
+    for invalid_id in invalid {
+        assert_eq!(
+            images::read(&path, &invalid_id).unwrap_err(),
+            "图片地址无效。",
+            "{invalid_id:?}"
+        );
+    }
+    // Read validation follows the regex, not a stricter UUID version/variant parser.
+    let zero_id = "00000000-0000-0000-0000-000000000000.png";
+    assert_eq!(
+        images::read(&path, zero_id).unwrap_err(),
+        "找不到这张图片，可能已被删除。"
+    );
+    fs::write(scratch.0.join("images").join(zero_id), b"existing").unwrap();
+    assert_eq!(images::read(&path, zero_id).unwrap(), b"existing");
+    fs::remove_file(scratch.0.join("images").join(id)).unwrap();
+    assert_eq!(
+        images::read(&path, id).unwrap_err(),
+        "找不到这张图片，可能已被删除。"
+    );
+}
+
+#[test]
+fn images_io_failures_clean_temporary_files() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("threading.db");
+    let dir = scratch.0.join("images");
+    fs::write(&dir, b"blocked").unwrap();
+    assert_eq!(
+        images::save(&path, &STANDARD.encode(b"GIF89a")).unwrap_err(),
+        "无法保存图片。"
+    );
+    assert_eq!(fs::read(&dir).unwrap(), b"blocked");
+    fs::remove_file(&dir).unwrap();
+    fs::create_dir(&dir).unwrap();
+    let id = "00000000-0000-0000-0000-000000000000.png";
+    let destination = dir.join(id);
+    fs::create_dir(&destination).unwrap();
+    // A directory at the destination forces failure after the temporary file is synced.
+    assert!(images::write_image(&destination, b"GIF89a").is_err());
+    assert!(destination.is_dir());
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    assert_eq!(images::read(&path, id).unwrap_err(), "图片数据无法读取。");
+}
+
+#[test]
+fn images_survive_record_deletions_and_demo_cleanup() {
+    let mut db = Database::new();
+    let (org, project, thread) = db.seed();
+    let before = db.load();
+    let bytes = b"GIF89a\0\xff";
+    let reference = images::save(&db.path, &STANDARD.encode(bytes)).unwrap();
+    assert_eq!(db.load(), before);
+    let entry = db
+        .call(
+            "create_entry",
+            "",
+            json!({
+                "projectId": project, "threadId": thread, "kind": "note",
+                "body": format!("![说明](attachment:{})", reference.id),
+            }),
+        )
+        .unwrap()
+        .entries[0]
+        .id
+        .clone();
+    db.call("delete", &entry, json!("entry")).unwrap();
+    db.call("delete", &thread, json!("thread")).unwrap();
+    db.call("delete", &org, json!("organization")).unwrap();
+    db.call("import_demo_data", "", demo_seed()).unwrap();
+    db.call("clear_demo_data", "", json!({})).unwrap();
+    assert_eq!(images::read(&db.path, &reference.id).unwrap(), bytes);
+}
+
+#[test]
+fn image_ipc_returns_raw_bytes_without_acquiring_database_lock() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("threading.db");
+    let connection = Arc::new(Mutex::new(Connection::open_in_memory().unwrap()));
+    let app = tauri::test::mock_builder()
+        .manage(crate::AppState {
+            connection: Arc::clone(&connection),
+            data_path: path.clone(),
+        })
+        .invoke_handler(crate::command_handler())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let invoke = |cmd: &str, body: Value| {
+        tauri::test::get_ipc_response(
+            &window,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().unwrap(),
+                body: tauri::ipc::InvokeBody::Json(body),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+    };
+    let _guard = connection.lock().unwrap();
+    for (bytes, ext, mime) in image_samples() {
+        let reference: ImageRef = invoke("save_image", json!({"data": STANDARD.encode(bytes)}))
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert!(reference.id.ends_with(&format!(".{ext}")));
+        assert_eq!(reference.mime, mime);
+        assert_eq!(reference.size, bytes.len());
+        match invoke("read_image", json!({"id": reference.id})).unwrap() {
+            tauri::ipc::InvokeResponseBody::Raw(actual) => assert_eq!(actual, bytes),
+            tauri::ipc::InvokeResponseBody::Json(_) => panic!("read_image 必须返回原始字节"),
+        }
+    }
+    for (data, expected) in [
+        ("!", "图片数据无法读取。"),
+        ("", "图片是空的。"),
+        ("aGVsbG8=", "只支持 PNG、JPEG、GIF 和 WebP 图片。"),
+    ] {
+        assert_eq!(
+            invoke("save_image", json!({"data":data})).unwrap_err(),
+            json!(expected)
+        );
+    }
+    assert_eq!(
+        invoke(
+            "save_image",
+            json!({"data":STANDARD.encode(vec![0; 10 * 1024 * 1024 + 1])})
+        )
+        .unwrap_err(),
+        json!("图片不能超过 10 MB。")
+    );
+    assert_eq!(
+        invoke("read_image", json!({"id":"../threading.db"})).unwrap_err(),
+        json!("图片地址无效。")
+    );
+    assert_eq!(
+        invoke(
+            "read_image",
+            json!({"id":"00000000-0000-0000-0000-000000000000.png"})
+        )
+        .unwrap_err(),
+        json!("找不到这张图片，可能已被删除。")
+    );
+    assert_eq!(fs::read_dir(scratch.0.join("images")).unwrap().count(), 5);
+    assert!(!path.exists());
+}
+
+#[test]
+fn image_csp_matches_contract() {
+    let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+    assert_eq!(config["app"]["security"]["csp"], "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'; base-uri 'self'");
 }

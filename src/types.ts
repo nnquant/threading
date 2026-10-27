@@ -187,3 +187,14 @@ export interface DemoSeed {
   todos: Todo[];
   entries: Entry[];
 }
+
+/**
+ * An image saved next to the database, referenced from Markdown as `![alt](attachment:<id>)`.
+ * The id is the file name, `<uuid>.<ext>`; images never change once saved.
+ */
+export interface ImageRef {
+  id: string;
+  mime: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  /** Bytes. */
+  size: number;
+}

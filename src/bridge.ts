@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
-  Change, DemoSeed, EntityKind, EntryInput, EntryPatch, Id, OrganizationInput, OrganizationPatch, ProjectInput, ProjectPatch,
+  Change, DemoSeed, EntityKind, EntryInput, EntryPatch, Id, ImageRef, OrganizationInput, OrganizationPatch, ProjectInput, ProjectPatch,
   SettingsPatch, ThreadInput, ThreadPatch, TodoInput, TodoPatch, Workspace,
 } from './types';
 
@@ -28,6 +28,9 @@ export interface Api {
   backupNow(): Promise<string>;
   importDemoData(seed: DemoSeed): Promise<Change>;
   clearDemoData(): Promise<Change>;
+  /** Saves an image file given as base64 and returns its reference; see `docs/backend-contract.md`. */
+  saveImage(data: string): Promise<ImageRef>;
+  readImage(id: string): Promise<ArrayBuffer>;
 }
 
 const desktopApi: Api = {
@@ -52,6 +55,8 @@ const desktopApi: Api = {
   backupNow: () => invoke('backup_now'),
   importDemoData: seed => invoke('import_demo_data', { seed }),
   clearDemoData: () => invoke('clear_demo_data'),
+  saveImage: data => invoke('save_image', { data }),
+  readImage: id => invoke('read_image', { id }),
 };
 
 /** Desktop builds talk to the Rust store; the browser preview runs an in-memory demo with the same rules. */

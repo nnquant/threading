@@ -51,6 +51,8 @@
 | `backup_now` | — | `string`（备份文件绝对路径） |
 | `import_demo_data` | `seed: DemoSeed` | `Change` |
 | `clear_demo_data` | — | `Change` |
+| `save_image` | `data: string`（图片文件的 base64） | `ImageRef` |
+| `read_image` | `id: string` | 图片原始字节（前端收到 `ArrayBuffer`） |
 
 `load_workspace` 返回的数组按 `position` 升序，`entries` 按 `createdAt` 升序。
 
@@ -201,8 +203,8 @@
 - `core:default`、`core:window:allow-minimize`、`core:window:allow-toggle-maximize`、`core:window:allow-close`、`core:window:allow-start-dragging`
 - `tauri-plugin-opener`：`opener:allow-open-url`（仅 `http://*`、`https://*`）、`opener:allow-reveal-item-in-dir`
 
-CSP 同 Dropping：`default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'; base-uri 'self'`。
+CSP 在 Dropping 的基础上为图片放开 `blob:`（前端把 `read_image` 读到的字节转成 blob URL 显示）和 `https:`（正文里引用的网络图片）：`default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob: https:; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-src 'none'; base-uri 'self'`。
 
 ## 测试要求
 
-`cargo test --locked --manifest-path src-tauri/Cargo.toml` 覆盖：迁移与重开、每条校验规则的拒绝路径、事件生成（含“未改变不生成”）、`waiting` / `closed` 联动、`lastActivityAt` 与 `reviewed`、移动项目时条目跟随、项目进展更新健康度、`reorder` 的正确与错误输入、级联删除返回的 `deleted` 完整、备份轮换。测试用临时目录，不触碰真实数据目录。
+`cargo test --locked --manifest-path src-tauri/Cargo.toml` 覆盖：迁移与重开、每条校验规则的拒绝路径、事件生成（含“未改变不生成”）、`waiting` / `closed` 联动、`lastActivityAt` 与 `reviewed`、移动项目时条目跟随、项目进展更新健康度、`reorder` 的正确与错误输入、级联删除返回的 `deleted` 完整、备份轮换、示例数据的写入（保留 id 与时间戳、`demo` 与位置）与各条拒绝路径、清理只删除示例组织及其下内容；迁移 3 保留旧数据；子策略线的新建与上级校验（不存在、跨项目、自身、成环）、改上级与 `parent` 事件、同级内的 `position` 与 `reorder`、移项目时整棵子树连同条目跟随、删除时子孙全部级联且 `deleted` 完整、推进子策略线刷新整条上级链、示例数据中的 `parentId` 引用与成环拒绝；图片的四种格式各自保存并原样读回（文件名、扩展名、`mime`、`size`）、格式靠文件头识别（扩展名对不上的数据也按内容判定）、各条拒绝路径（base64 非法、空、超过 10 MB 的边界、不支持的格式、`id` 的路径穿越与大小写等变体、文件不存在）、保存后图片目录里不残留临时文件，以及经由真实 IPC 调用两个命令（`read_image` 返回原始字节）。测试用临时目录，不触碰真实数据目录。

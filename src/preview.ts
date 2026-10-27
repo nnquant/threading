@@ -2,6 +2,7 @@
 // so the interface can be developed and reviewed without the desktop shell. It is never used in the desktop app.
 import type { Api } from './bridge';
 import { seedWorkspace } from './demo';
+import { IMAGE_ID, MAX_IMAGE_BYTES, sniffImage } from './images';
 import { applyChange } from './workspace';
 import {
   ORG_COLORS, type Change, type EntityKind, type Entry, type EntryEvent, type EventField, type Id, type Metric, type Organization,
@@ -10,6 +11,7 @@ import {
 
 // v3: threads carry `parentId`, and the demo data has sub-lines.
 const STORAGE_KEY = 'threading.preview.v3';
+const IMAGE_KEY = 'threading.preview.image.v1.';
 type RowOf = { organization: Organization; project: Project; thread: Thread; todo: Todo; entry: Entry };
 const TABLE = { organization: 'organizations', project: 'projects', thread: 'threads', todo: 'todos', entry: 'entries' } as const;
 
@@ -124,6 +126,7 @@ function readStored(): Workspace | null {
 
 export function createPreviewApi(): Api {
   let workspace = readStored() ?? seedWorkspace();
+  const images = new Map<string, Uint8Array>();
   const commit = <T>(run: (tx: Tx) => T): Promise<Change> => {
     try {
       const tx = new Tx(workspace);
@@ -368,6 +371,33 @@ export function createPreviewApi(): Api {
       for (const entry of seed.entries) tx.put('entry', entry);
     }),
     clearDemoData: () => commit(tx => { for (const org of tx.all('organization').filter(row => row.demo)) cascadeOrganization(tx, org.id); }),
+    // Images stay in memory, with a best-effort copy in localStorage that may not fit.
+    saveImage: data => {
+      try {
+        let binary = '';
+        try { binary = atob(data); } catch { fail('图片数据无法读取。'); }
+        if (!binary.length) fail('图片是空的。');
+        if (binary.length > MAX_IMAGE_BYTES) fail('图片不能超过 10 MB。');
+        const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+        const kind = sniffImage(bytes) ?? fail('只支持 PNG、JPEG、GIF 和 WebP 图片。');
+        const id = `${crypto.randomUUID()}.${kind.ext}`;
+        images.set(id, bytes);
+        try { localStorage.setItem(IMAGE_KEY + id, data); } catch { /* too big for storage: kept for this session */ }
+        return Promise.resolve({ id, mime: kind.mime, size: bytes.length });
+      } catch (error) { return Promise.reject(error); }
+    },
+    readImage: id => {
+      if (!IMAGE_ID.test(id)) return Promise.reject(new Error('图片地址无效。'));
+      let bytes = images.get(id);
+      if (!bytes) {
+        try {
+          const stored = localStorage.getItem(IMAGE_KEY + id);
+          if (stored) bytes = Uint8Array.from(atob(stored), char => char.charCodeAt(0));
+        } catch { /* not stored */ }
+      }
+      if (!bytes) return Promise.reject(new Error('找不到这张图片，可能已被删除。'));
+      return Promise.resolve(bytes.slice().buffer);
+    },
   };
 }
 

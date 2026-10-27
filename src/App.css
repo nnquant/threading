@@ -544,6 +544,10 @@ button.project-row:hover { background: var(--bg-hover); }
 .markdown th, .markdown td { padding: 4px 10px; border: 1px solid var(--line); }
 .markdown th { font-weight: 600; background: var(--bg-subtle); }
 .markdown hr { height: 1px; border: 0; background: var(--line); }
+.md-image { max-width: 100%; max-height: 420px; border: 1px solid var(--line); border-radius: var(--radius); vertical-align: top; cursor: zoom-in; }
+.md-image-broken { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px dashed var(--line-strong); border-radius: var(--radius); font-size: 12px; color: var(--fg-3); }
+.lightbox { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 40px; background: rgba(17, 17, 17, .72); cursor: zoom-out; animation: rise .14s ease-out; }
+.lightbox img { max-width: 100%; max-height: 100%; border-radius: var(--radius); background: #fff; box-shadow: 0 24px 60px rgba(0, 0, 0, .35); }
 
 /* Composer and timeline: entries are knots on a vertical thread */
 .composer { border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); }

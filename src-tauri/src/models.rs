@@ -274,3 +274,11 @@ pub struct SettingsPatch {
     pub stale_days: Option<i64>,
     pub wip_limit: Option<i64>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageRef {
+    pub id: String,
+    pub mime: String,
+    pub size: usize,
+}

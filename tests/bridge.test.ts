@@ -19,6 +19,8 @@ describe('desktop bridge', () => {
     await api.loadWorkspace();
     await api.importDemoData({ organizations: [], projects: [], threads: [], todos: [], entries: [] });
     await api.clearDemoData();
+    await api.saveImage('iVBORw0KGgo=');
+    await api.readImage('3f2a9c1e-8b7d-4e6f-a1b2-c3d4e5f60789.png');
     expect(tauri.invoke.mock.calls).toEqual([
       ['update_thread', { id: 't1', patch: { stage: 'paper', hill: 0 } }],
       ['create_entry', { input: { projectId: 'p1', threadId: null, kind: 'update', body: '进展', health: 'atRisk' } }],
@@ -26,6 +28,8 @@ describe('desktop bridge', () => {
       ['load_workspace'],
       ['import_demo_data', { seed: { organizations: [], projects: [], threads: [], todos: [], entries: [] } }],
       ['clear_demo_data'],
+      ['save_image', { data: 'iVBORw0KGgo=' }],
+      ['read_image', { id: '3f2a9c1e-8b7d-4e6f-a1b2-c3d4e5f60789.png' }],
     ]);
   });
 
@@ -35,7 +39,7 @@ describe('desktop bridge', () => {
     const used = [...bridge.matchAll(/invoke\('([a-z_]+)'/g)].map(match => match[1]);
     const handler = lib.slice(lib.indexOf('generate_handler!['));
     const registered = [...handler.slice(0, handler.indexOf(']')).matchAll(/([a-z_]+),/g)].map(match => match[1]);
-    expect(used.length).toBe(21);
+    expect(used.length).toBe(23);
     expect(new Set(used)).toEqual(new Set(registered));
   });
 

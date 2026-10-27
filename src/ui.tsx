@@ -1,8 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject, type TextareaHTMLAttributes } from 'react';
-import ReactMarkdown from 'react-markdown';
+import { createPortal } from 'react-dom';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Check, ChevronDown, CircleCheck, Hourglass, Pause, X } from 'lucide-react';
+import { Check, ChevronDown, CircleCheck, Hourglass, ImageOff, Pause, X } from 'lucide-react';
 import { desktop } from './bridge';
+import { useApp } from './context';
+import { ATTACHMENT, imageUrl } from './images';
 import { HEALTH_LABEL, ORG_COLOR, PRIORITY_LABEL, STAGE_LABEL, STATE_LABEL } from './labels';
 import { STAGES, type Health, type Organization, type Priority, type Stage, type ThreadState } from './types';
 
@@ -192,16 +195,51 @@ export function Dialog({ title, subtitle, onClose, children, className = '', wid
   );
 }
 
-/** Markdown with GFM; links open in the system browser and HTML is not rendered. */
+/** An image in rendered Markdown: saved images load through the backend, and a click shows it full size. */
+function MarkdownImage({ src = '', alt = '' }: { src?: string; alt?: string }) {
+  const { api } = useApp();
+  const [url, setUrl] = useState<string | null>(src.startsWith(ATTACHMENT) ? null : src);
+  const [broken, setBroken] = useState(false);
+  const [zoom, setZoom] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setBroken(false);
+    imageUrl(api, src).then(next => { if (live) setUrl(next); }, () => { if (live) setBroken(true); });
+    return () => { live = false; };
+  }, [api, src]);
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); setZoom(false); } };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [zoom]);
+  if (broken) return <span className="md-image-broken" title={src}><ImageOff size={13} />{alt || '图片无法显示'}</span>;
+  return (
+    <>
+      <img className="md-image" src={url ?? undefined} alt={alt} title={alt || undefined} onClick={() => setZoom(true)} />
+      {zoom && url && createPortal(
+        <div className="lightbox" role="dialog" aria-label={alt || '图片'} onClick={() => setZoom(false)}><img src={url} alt={alt} /></div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+/** Lets saved-image references through; everything else gets react-markdown's safe-URL check. */
+const urlTransform = (url: string) => url.startsWith(ATTACHMENT) ? url : defaultUrlTransform(url);
+
+/** Markdown with GFM; links open in the system browser, images can be saved ones, and HTML is not rendered. */
 export function Markdown({ text, className = '' }: { text: string; className?: string }) {
   return (
     <div className={`markdown ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        urlTransform={urlTransform}
         components={{
           a: ({ href, children }) => (
             <a href={href} onClick={event => { event.preventDefault(); if (href) void desktop.openUrl(href); }} title={href}>{children}</a>
           ),
+          img: ({ src, alt }) => <MarkdownImage src={typeof src === 'string' ? src : ''} alt={alt} />,
         }}
       >
         {text}
