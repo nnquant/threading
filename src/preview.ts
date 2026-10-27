@@ -1,14 +1,15 @@
 // Browser preview backend: an in-memory store seeded with demo data that follows docs/backend-contract.md,
 // so the interface can be developed and reviewed without the desktop shell. It is never used in the desktop app.
 import type { Api } from './bridge';
-import { DAY, addDays, todayIso } from './labels';
+import { seedWorkspace } from './demo';
 import { applyChange } from './workspace';
 import {
   ORG_COLORS, type Change, type EntityKind, type Entry, type EntryEvent, type EventField, type Id, type Metric, type Organization,
   type Project, type Settings, type Thread, type Todo, type Workspace,
 } from './types';
 
-const STORAGE_KEY = 'threading.preview.v1';
+// v3: threads carry `parentId`, and the demo data has sub-lines.
+const STORAGE_KEY = 'threading.preview.v3';
 type RowOf = { organization: Organization; project: Project; thread: Thread; todo: Todo; entry: Entry };
 const TABLE = { organization: 'organizations', project: 'projects', thread: 'threads', todo: 'todos', entry: 'entries' } as const;
 
@@ -72,9 +73,26 @@ class Tx {
     const event: EntryEvent = { field, from, to };
     this.put('entry', { id: crypto.randomUUID(), projectId, threadId, kind: 'event', body: '', health: null, event, createdAt: this.time, editedAt: null });
   }
+  /** Records work on a line, which is also work on every line above it. */
   touch(threadId: Id) {
-    const thread = this.get('thread', threadId, '找不到该策略线，可能已被删除。');
-    this.put('thread', { ...thread, lastActivityAt: this.time, updatedAt: this.time });
+    const seen = new Set<Id>();
+    for (let id: Id | null = threadId; id && !seen.has(id);) {
+      seen.add(id);
+      const thread: Thread = this.get('thread', id, '找不到该策略线，可能已被删除。');
+      this.put('thread', { ...thread, lastActivityAt: this.time, updatedAt: this.time });
+      id = thread.parentId;
+    }
+  }
+  /** Every line below a thread. */
+  subtree(threadId: Id): Thread[] {
+    const threads = this.all('thread');
+    const found: Thread[] = [];
+    const seen = new Set([threadId]);
+    const visit = (parentId: Id) => {
+      for (const child of threads.filter(row => row.parentId === parentId && !seen.has(row.id))) { seen.add(child.id); found.push(child); visit(child.id); }
+    };
+    visit(threadId);
+    return found;
   }
   change(): Change {
     const change: Change = {};
@@ -116,15 +134,36 @@ export function createPreviewApi(): Api {
       return Promise.resolve(structuredClone(change));
     } catch (error) { return Promise.reject(error); }
   };
-  const cascadeThread = (tx: Tx, threadId: Id) => {
+  const removeThread = (tx: Tx, threadId: Id) => {
     for (const todo of tx.all('todo').filter(row => row.threadId === threadId)) tx.remove('todo', todo.id);
     for (const entry of tx.all('entry').filter(row => row.threadId === threadId)) tx.remove('entry', entry.id);
     tx.remove('thread', threadId);
   };
+  const cascadeThread = (tx: Tx, threadId: Id) => {
+    for (const thread of tx.subtree(threadId)) removeThread(tx, thread.id);
+    removeThread(tx, threadId);
+  };
+  // Sub-lines share their parent's project, so removing every line of the project covers all of them.
   const cascadeProject = (tx: Tx, projectId: Id) => {
-    for (const thread of tx.all('thread').filter(row => row.projectId === projectId)) cascadeThread(tx, thread.id);
+    for (const thread of tx.all('thread').filter(row => row.projectId === projectId)) removeThread(tx, thread.id);
     for (const entry of tx.all('entry').filter(row => row.projectId === projectId)) tx.remove('entry', entry.id);
     tx.remove('project', projectId);
+  };
+  const cascadeOrganization = (tx: Tx, orgId: Id) => {
+    for (const project of tx.all('project').filter(row => row.orgId === orgId)) cascadeProject(tx, project.id);
+    tx.remove('organization', orgId);
+  };
+  /** A parent must exist, share the project, and not sit inside the line being placed under it. */
+  const checkParent = (tx: Tx, parentId: Id, projectId: Id, self?: Id) => {
+    const parent = tx.get('thread', parentId, '找不到上级策略线，可能已被删除。');
+    if (parent.projectId !== projectId) fail('上级策略线必须在同一个项目里。');
+    const threads = new Map(tx.all('thread').map(row => [row.id, row]));
+    const seen = new Set<Id>();
+    for (let at: Thread | undefined = parent; at && !seen.has(at.id); at = at.parentId ? threads.get(at.parentId) : undefined) {
+      if (at.id === self) fail('不能把策略线放到它自己或它的子策略线下面。');
+      seen.add(at.id);
+    }
+    return parent;
   };
 
   return {
@@ -135,7 +174,7 @@ export function createPreviewApi(): Api {
       const count = tx.all('organization').length;
       tx.put('organization', {
         id: crypto.randomUUID(), name, code, color: input.color ?? ORG_COLORS[count % ORG_COLORS.length], note: text(input.note, '备注', 2000),
-        archived: false, position: tx.nextPosition('organization', () => true), createdAt: tx.time, updatedAt: tx.time,
+        archived: false, demo: false, position: tx.nextPosition('organization', () => true), createdAt: tx.time, updatedAt: tx.time,
       });
     }),
     updateOrganization: (id, patch) => commit(tx => {
@@ -147,11 +186,7 @@ export function createPreviewApi(): Api {
         note: patch.note === undefined ? org.note : text(patch.note, '备注', 2000), updatedAt: tx.time,
       });
     }),
-    deleteOrganization: id => commit(tx => {
-      tx.get('organization', id, MISSING.organization);
-      for (const project of tx.all('project').filter(row => row.orgId === id)) cascadeProject(tx, project.id);
-      tx.remove('organization', id);
-    }),
+    deleteOrganization: id => commit(tx => { tx.get('organization', id, MISSING.organization); cascadeOrganization(tx, id); }),
     createProject: input => commit(tx => {
       tx.get('organization', input.orgId, MISSING.organization);
       tx.put('project', {
@@ -181,15 +216,18 @@ export function createPreviewApi(): Api {
     deleteProject: id => commit(tx => { tx.get('project', id, MISSING.project); cascadeProject(tx, id); }),
     createThread: input => commit(tx => {
       tx.get('project', input.projectId, MISSING.project);
+      const parentId = input.parentId ?? null;
+      if (parentId) checkParent(tx, parentId, input.projectId);
       const state = input.state ?? 'active';
       const thread = tx.put('thread', {
-        id: crypto.randomUUID(), projectId: input.projectId, title: text(input.title, '策略线名称', 120, true),
+        id: crypto.randomUUID(), projectId: input.projectId, parentId, title: text(input.title, '策略线名称', 120, true),
         summary: text(input.summary, '说明', 20000), stage: input.stage ?? 'idea', state, priority: input.priority ?? 'normal', hill: 0,
         waitingOn: '', waitingSince: state === 'waiting' ? tx.time : null, tags: tags(input.tags), metrics: [],
-        position: tx.nextPosition('thread', row => row.projectId === input.projectId), createdAt: tx.time, updatedAt: tx.time,
+        position: tx.nextPosition('thread', row => row.projectId === input.projectId && row.parentId === parentId), createdAt: tx.time, updatedAt: tx.time,
         lastActivityAt: tx.time, reviewedAt: null, closedAt: state === 'closed' ? tx.time : null,
       });
       tx.event(thread.projectId, thread.id, 'created', null, thread.stage);
+      if (parentId) tx.touch(parentId);
       const action = text(input.nextAction, '下一步', 500);
       if (action) tx.put('todo', { id: crypto.randomUUID(), threadId: thread.id, text: action, due: null, done: false, doneAt: null, position: 0, createdAt: tx.time, updatedAt: tx.time });
     }),
@@ -215,21 +253,38 @@ export function createPreviewApi(): Api {
       if (patch.reviewed) next.reviewedAt = tx.time;
       const working = Object.keys(patch).some(key => key !== 'reviewed');
       if (working) { next.lastActivityAt = tx.time; next.updatedAt = tx.time; }
+      // A line moves to another project with all its sub-lines, and lands at the top level unless a parent there is given.
       const moving = patch.projectId !== undefined && patch.projectId !== thread.projectId;
-      if (moving) {
-        tx.get('project', patch.projectId!, MISSING.project);
-        next.projectId = patch.projectId!;
-        next.position = tx.nextPosition('thread', row => row.projectId === next.projectId);
-      }
+      if (moving) tx.get('project', patch.projectId!, MISSING.project);
+      next.projectId = moving ? patch.projectId! : thread.projectId;
+      next.parentId = patch.parentId !== undefined ? patch.parentId : moving ? null : thread.parentId;
+      const reparenting = next.parentId !== thread.parentId;
+      if (next.parentId && (moving || reparenting)) checkParent(tx, next.parentId, next.projectId, id);
+      if (moving || reparenting) next.position = tx.nextPosition('thread', row => row.projectId === next.projectId && row.parentId === next.parentId && row.id !== id);
+      const subtree = moving ? tx.subtree(id) : [];
       tx.put('thread', next);
+      if (working && next.parentId) tx.touch(next.parentId);
       if (next.stage !== thread.stage) tx.event(next.projectId, id, 'stage', thread.stage, next.stage);
       if (next.state !== thread.state) tx.event(next.projectId, id, 'state', thread.state, next.state);
       if (moving) {
-        for (const entry of tx.all('entry').filter(row => row.threadId === id)) tx.put('entry', { ...entry, projectId: next.projectId });
-        tx.event(next.projectId, id, 'project', tx.get('project', thread.projectId, MISSING.project).name, tx.get('project', next.projectId, MISSING.project).name);
+        const from = tx.get('project', thread.projectId, MISSING.project).name;
+        const to = tx.get('project', next.projectId, MISSING.project).name;
+        for (const row of [next, ...subtree]) {
+          if (row !== next) tx.put('thread', { ...row, projectId: next.projectId, updatedAt: tx.time });
+          for (const entry of tx.all('entry').filter(item => item.threadId === row.id)) tx.put('entry', { ...entry, projectId: next.projectId });
+          tx.event(next.projectId, row.id, 'project', from, to);
+        }
+      }
+      if (reparenting) {
+        const title = (parentId: Id | null) => parentId ? tx.get('thread', parentId, MISSING.thread).title : null;
+        tx.event(next.projectId, id, 'parent', title(thread.parentId), title(next.parentId));
       }
     }),
-    deleteThread: id => commit(tx => { tx.get('thread', id, MISSING.thread); cascadeThread(tx, id); }),
+    deleteThread: id => commit(tx => {
+      const thread = tx.get('thread', id, MISSING.thread);
+      cascadeThread(tx, id);
+      if (thread.parentId) tx.touch(thread.parentId);
+    }),
     createTodo: input => commit(tx => {
       tx.get('thread', input.threadId, MISSING.thread);
       tx.put('todo', {
@@ -271,10 +326,10 @@ export function createPreviewApi(): Api {
     deleteEntry: id => commit(tx => { tx.get('entry', id, MISSING.entry); tx.remove('entry', id); }),
     reorder: (kind, ids) => commit(tx => {
       const rows = ids.map(id => tx.get(kind, id, MISSING[kind]) as unknown as { id: Id; position: number } & Record<string, unknown>);
-      const parentKey = { organization: null, project: 'orgId', thread: 'projectId', todo: 'threadId' }[kind];
-      const parent = parentKey ? rows[0]?.[parentKey] : null;
-      const siblings = (tx.all(kind) as unknown as Record<string, unknown>[]).filter(row => !parentKey || row[parentKey] === parent);
-      if (new Set(ids).size !== ids.length || siblings.length !== ids.length) fail('排序列表必须包含同一层级的全部条目。');
+      const parentKeys = { organization: [], project: ['orgId'], thread: ['projectId', 'parentId'], todo: ['threadId'] }[kind];
+      const sameParent = (row: Record<string, unknown>) => parentKeys.every(key => row[key] === rows[0]?.[key]);
+      const siblings = (tx.all(kind) as unknown as Record<string, unknown>[]).filter(sameParent);
+      if (new Set(ids).size !== ids.length || !rows.every(sameParent) || siblings.length !== ids.length) fail('排序列表必须包含同一层级的全部条目。');
       rows.forEach((row, position) => tx.put(kind, { ...row, position } as never));
     }),
     updateSettings: patch => commit(tx => {
@@ -284,93 +339,35 @@ export function createPreviewApi(): Api {
       tx.settings = settings;
     }),
     backupNow: () => Promise.reject(new Error('浏览器预览不写入本机文件，请在桌面客户端中备份。')),
+    importDemoData: seed => commit(tx => {
+      if (tx.all('organization').some(org => org.demo)) fail('示例数据已经添加过了，先清理再重新添加。');
+      const ids = new Set<Id>((Object.keys(TABLE) as EntityKind[]).flatMap(kind => tx.all(kind).map(row => row.id)));
+      for (const row of [...seed.organizations, ...seed.projects, ...seed.threads, ...seed.todos, ...seed.entries]) {
+        if (ids.has(row.id)) fail('示例数据的 id 重复或与已有记录冲突。');
+        ids.add(row.id);
+      }
+      const orgs = new Set(seed.organizations.map(row => row.id));
+      const projects = new Set(seed.projects.map(row => row.id));
+      const threadProject = new Map(seed.threads.map(row => [row.id, row.projectId]));
+      if (!seed.projects.every(row => orgs.has(row.orgId))) fail('示例项目必须引用本次导入的组织。');
+      if (!seed.threads.every(row => projects.has(row.projectId))) fail('示例策略线必须引用本次导入的项目。');
+      const seedThread = new Map(seed.threads.map(row => [row.id, row]));
+      if (!seed.threads.every(row => row.parentId == null || seedThread.get(row.parentId)?.projectId === row.projectId)) fail('示例策略线的上级必须是本次导入的同一项目里的策略线。');
+      for (const row of seed.threads) {
+        let steps = 0;
+        for (let at: Thread | undefined = row; at?.parentId; at = seedThread.get(at.parentId)) if (++steps > seed.threads.length) fail('示例策略线的上级不能成环。');
+      }
+      if (!seed.todos.every(row => threadProject.has(row.threadId))) fail('示例待办必须引用本次导入的策略线。');
+      if (!seed.entries.every(row => projects.has(row.projectId))) fail('示例条目必须引用本次导入的项目。');
+      if (!seed.entries.every(row => row.threadId == null || threadProject.get(row.threadId) === row.projectId)) fail('示例条目的策略线必须属于本次导入的同一项目。');
+      let position = tx.nextPosition('organization', () => true);
+      for (const org of seed.organizations) tx.put('organization', { ...org, demo: true, position: position++ });
+      for (const project of seed.projects) tx.put('project', project);
+      for (const thread of seed.threads) tx.put('thread', thread);
+      for (const todo of seed.todos) tx.put('todo', todo);
+      for (const entry of seed.entries) tx.put('entry', entry);
+    }),
+    clearDemoData: () => commit(tx => { for (const org of tx.all('organization').filter(row => row.demo)) cascadeOrganization(tx, org.id); }),
   };
 }
 
-/** Demo workspace: three organizations with quant strategy projects at different stages and states. */
-export function seedWorkspace(now = Date.now()): Workspace {
-  const ago = (days: number, hours = 0) => now - days * DAY - hours * 3_600_000;
-  const today = todayIso(now);
-  const organizations: Organization[] = [];
-  const projects: Project[] = [];
-  const threads: Thread[] = [];
-  const todos: Todo[] = [];
-  const entries: Entry[] = [];
-  const org = (name: string, code: string, color: Organization['color']) => {
-    const row: Organization = { id: crypto.randomUUID(), name, code, color, note: '', archived: false, position: organizations.length, createdAt: ago(90), updatedAt: ago(90) };
-    organizations.push(row);
-    return row.id;
-  };
-  const project = (orgId: Id, name: string, goal: string, health: Project['health'], status: Project['status'] = 'active', targetDate: string | null = null) => {
-    const row: Project = { id: crypto.randomUUID(), orgId, name, goal, status, health, targetDate, position: projects.filter(p => p.orgId === orgId).length, createdAt: ago(80), updatedAt: ago(3) };
-    projects.push(row);
-    return row.id;
-  };
-  type Spec = Partial<Thread> & Pick<Thread, 'title' | 'stage'> & { idle: number; todo?: [string, number | null][]; log?: [Entry['kind'], string, number][] };
-  const thread = (projectId: Id, spec: Spec) => {
-    const { idle, todo = [], log = [], ...fields } = spec;
-    const row: Thread = {
-      id: crypto.randomUUID(), projectId, summary: '', state: 'active', priority: 'normal', hill: 0, waitingOn: '', waitingSince: null, tags: [], metrics: [],
-      position: threads.filter(t => t.projectId === projectId).length, createdAt: ago(60), updatedAt: ago(idle), lastActivityAt: ago(idle, 2), reviewedAt: null, closedAt: null,
-      ...fields,
-    };
-    threads.push(row);
-    entries.push({ id: crypto.randomUUID(), projectId, threadId: row.id, kind: 'event', body: '', health: null, event: { field: 'created', from: null, to: 'idea' }, createdAt: row.createdAt, editedAt: null });
-    todo.forEach(([text, due], position) => todos.push({
-      id: crypto.randomUUID(), threadId: row.id, text, due: due == null ? null : addDays(today, due), done: false, doneAt: null, position, createdAt: ago(idle + 3), updatedAt: ago(idle + 3),
-    }));
-    log.forEach(([kind, body, days]) => entries.push({ id: crypto.randomUUID(), projectId, threadId: row.id, kind, body, health: null, event: null, createdAt: ago(days, 3), editedAt: null }));
-    return row;
-  };
-
-  const own = org('自营研究', 'ZY', 'slate');
-  const bay = org('澜湾资产', 'LW', 'blue');
-  const dawn = org('启明投顾', 'QM', 'teal');
-
-  const cta = project(own, '商品 CTA 多因子', '年底前完成 3 条低相关因子线的模拟盘验证，组合夏普 > 1.5。', 'onTrack', 'active', addDays(today, 66));
-  const vol = project(own, '期权波动率', '搭建波动率曲面数据与回测框架，验证两条波动率策略。', 'atRisk');
-  const enhance = project(bay, '中证 1000 指数增强', '年化超额 8% 以上，跟踪误差控制在 5% 以内。', 'atRisk', 'active', addDays(today, 35));
-  const cb = project(bay, '可转债轮动', '双低框架改进，等客户确认额度后重启。', 'onTrack', 'paused');
-  const bond = project(dawn, '国债期货择时', '为客户的利率债组合提供久期择时信号。', 'onTrack', 'active', addDays(today, 20));
-
-  thread(cta, {
-    title: '期限结构因子', stage: 'backtest', priority: 'high', hill: 62, idle: 1, tags: ['展期收益', '截面'],
-    summary: '用主力与次主力的展期收益率构造截面因子，按板块中性化。\n\n- 数据：日频收盘价、持仓量\n- 调仓：周频',
-    metrics: [{ label: '夏普', value: '1.42' }, { label: '年化', value: '18.6%' }, { label: '最大回撤', value: '-9.8%' }],
-    todo: [['补 2015–2017 年样本外回测', -1], ['检查换月逻辑对收益的影响', null]],
-    log: [['result', '样本内夏普 1.6，样本外降到 1.1，主要被黑色系拖累。', 4], ['decision', '换月改为按持仓量切换，不再按固定日期。', 2]],
-  });
-  thread(cta, {
-    title: '动量与波动率择时', stage: 'paper', hill: 78, idle: 2, tags: ['时序'],
-    metrics: [{ label: '夏普', value: '1.21' }, { label: '模拟天数', value: '23' }],
-    todo: [['核对模拟盘与回测的成交差异', 2]],
-    log: [['note', '模拟盘第三周，滑点比假设高 0.6 bp，先观察到月底。', 2]],
-  });
-  thread(cta, { title: '基差动量', stage: 'research', hill: 30, idle: 12, tags: ['基差'], log: [['note', '初步 IC 0.03，偏弱，需要换现货价格源再看。', 12]] });
-  thread(cta, { title: '仓单因子', stage: 'idea', state: 'paused', priority: 'low', hill: 5, idle: 20 });
-
-  thread(vol, {
-    title: '50ETF 波动率曲面套利', stage: 'backtest', state: 'waiting', hill: 40, idle: 6, waitingOn: '数据组补齐 2019 年分钟数据', waitingSince: ago(6),
-    todo: [['数据到位后重跑 2019 年', null]],
-  });
-  thread(vol, { title: '尾部对冲', stage: 'research', priority: 'high', hill: 20, idle: 3, todo: [['确定对冲预算上限', 5]] });
-
-  thread(enhance, {
-    title: '基本面 Alpha 模型', stage: 'live', priority: 'urgent', hill: 90, idle: 0, tags: ['实盘'],
-    metrics: [{ label: '超额年化', value: '9.2%' }, { label: '跟踪误差', value: '4.1%' }, { label: '信息比', value: '1.9' }],
-    todo: [['排查 10 月超额回撤的原因', 0], ['给客户写月度归因说明', 4]],
-    log: [['result', '10 月以来超额回撤 2.3%，集中在小盘成长。', 1]],
-  });
-  thread(enhance, { title: '高频量价因子', stage: 'backtest', priority: 'high', hill: 55, idle: 9, todo: [['去掉涨跌停样本后重算 IC', 1]] });
-  thread(enhance, { title: '风格中性约束', stage: 'research', state: 'waiting', hill: 35, idle: 3, waitingOn: '客户确认行业偏离上限', waitingSince: ago(3) });
-
-  thread(cb, { title: '双低策略改进', stage: 'paper', state: 'paused', hill: 70, idle: 25 });
-
-  thread(bond, { title: '宏观因子择时', stage: 'backtest', hill: 48, idle: 1, todo: [['加入资金面指标', 1]], log: [['decision', '信号频率定为周度，月度太慢。', 1]] });
-  thread(bond, { title: '技术面趋势', stage: 'retired', state: 'closed', hill: 100, idle: 30, closedAt: ago(30), log: [['result', '扣费后不显著，停止。', 30]] });
-
-  entries.push({ id: crypto.randomUUID(), projectId: enhance, threadId: null, kind: 'update', body: '实盘超额回撤，客户已在问。本周优先排查回撤原因，高频因子线往后放。', health: 'atRisk', event: null, createdAt: ago(1, 5), editedAt: null });
-  entries.push({ id: crypto.randomUUID(), projectId: cta, threadId: null, kind: 'update', body: '两条线进入回测以后，进度符合预期。', health: 'onTrack', event: null, createdAt: ago(5), editedAt: null });
-
-  return { organizations, projects, threads, todos, entries, settings: { staleDays: 7, wipLimit: 8 }, dataPath: '浏览器预览（不写入本机文件）' };
-}

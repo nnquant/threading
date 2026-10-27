@@ -158,6 +158,23 @@ async fn update_settings(state: State<'_, AppState>, patch: Value) -> Result<Cha
 }
 
 #[tauri::command]
+async fn import_demo_data(state: State<'_, AppState>, seed: Value) -> Result<Change, String> {
+    blocking(state, move |conn, path| {
+        let seed: DemoSeed = decode(seed)?;
+        store::transact(conn, path, |w, now| store::import_demo_data(w, seed, now))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn clear_demo_data(state: State<'_, AppState>) -> Result<Change, String> {
+    blocking(state, |conn, path| {
+        store::transact(conn, path, store::clear_demo_data)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn backup_now(state: State<'_, AppState>) -> Result<String, String> {
     blocking(state, |conn, path| {
         backup::now(&snapshot(conn, path)?, path)
@@ -215,6 +232,8 @@ fn command_handler<R: tauri::Runtime>(
         reorder,
         update_settings,
         backup_now,
+        import_demo_data,
+        clear_demo_data,
     ]
 }
 

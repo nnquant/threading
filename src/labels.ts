@@ -22,7 +22,7 @@ export const KIND_LABEL: Record<EntryKind, string> = {
   note: '笔记', decision: '决策', result: '结果', update: '进展', event: '变更',
 };
 export const EVENT_LABEL: Record<EventField, string> = {
-  created: '创建', stage: '阶段', state: '状态', project: '项目', health: '健康度', status: '项目状态',
+  created: '创建', stage: '阶段', state: '状态', project: '项目', parent: '上级', health: '健康度', status: '项目状态',
 };
 export const ORG_COLOR: Record<OrgColor, string> = {
   slate: '#6b7280', blue: '#3b6fd8', teal: '#14897f', green: '#3f8f3a',

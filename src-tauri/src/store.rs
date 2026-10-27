@@ -36,11 +36,24 @@ pub fn open(data_dir: &Path) -> Result<Connection> {
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("无法开始数据库迁移")?;
     let version: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    ensure!(version <= 1, "数据库版本较新，请升级 Threading 后再打开。");
+    ensure!(version <= 3, "数据库版本较新，请升级 Threading 后再打开。");
     if version == 0 {
         tx.execute_batch(include_str!("schema.sql"))
             .context("数据库迁移失败")?;
         tx.pragma_update(None, "user_version", 1)?;
+    }
+    if version < 2 {
+        tx.execute_batch("ALTER TABLE organizations ADD COLUMN demo INTEGER NOT NULL DEFAULT 0;")
+            .context("示例数据标记迁移失败")?;
+        tx.pragma_update(None, "user_version", 2)?;
+    }
+    if version < 3 {
+        tx.execute_batch(
+            "ALTER TABLE threads ADD COLUMN parent_id TEXT NULL REFERENCES threads(id);
+             CREATE INDEX threads_siblings ON threads(projectId, parent_id, position);",
+        )
+        .context("子策略线迁移失败")?;
+        tx.pragma_update(None, "user_version", 3)?;
     }
     tx.commit().context("无法提交数据库迁移")?;
     Ok(conn)
@@ -57,7 +70,9 @@ fn rows<T: DeserializeOwned>(conn: &Connection, table: &str, order: &str) -> Res
         for (index, name) in names.iter().enumerate() {
             let value = match row.get_ref(index)? {
                 ValueRef::Null => Value::Null,
-                ValueRef::Integer(v) if name == "archived" || name == "done" => Value::Bool(v != 0),
+                ValueRef::Integer(v) if matches!(name.as_str(), "archived" | "done" | "demo") => {
+                    Value::Bool(v != 0)
+                }
                 ValueRef::Integer(v) => Value::from(v),
                 ValueRef::Text(v) => {
                     let s = std::str::from_utf8(v).context("数据库文本不是有效 UTF-8")?;
@@ -69,7 +84,12 @@ fn rows<T: DeserializeOwned>(conn: &Connection, table: &str, order: &str) -> Res
                 }
                 _ => bail!("数据库字段类型错误：{table}.{name}"),
             };
-            object.insert(name.clone(), value);
+            let name = if table == "threads" && name == "parent_id" {
+                "parentId"
+            } else {
+                name
+            };
+            object.insert(name.to_owned(), value);
         }
         result.push(serde_json::from_value(Value::Object(object)).context("数据库记录格式错误")?);
     }
@@ -142,7 +162,16 @@ fn upsert<T: Record>(conn: &Connection, table: &str, records: &[T]) -> Result<()
         let Value::Object(object) = serde_json::to_value(record)? else {
             unreachable!()
         };
-        let columns: Vec<_> = object.keys().cloned().collect();
+        let columns: Vec<_> = object
+            .keys()
+            .map(|name| {
+                if table == "threads" && name == "parentId" {
+                    "parent_id".to_owned()
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
         let values: Vec<SqlValue> = object
             .values()
             .map(|v| match v {
@@ -210,6 +239,20 @@ pub fn transact(
     if before.settings != after.settings || forced.settings.is_some() {
         change.settings = Some(after.settings);
     }
+    // Position is sibling-local; it cannot determine foreign-key deletion order.
+    let thread_order: HashMap<_, _> = parent_first(&before.threads)?
+        .into_iter()
+        .enumerate()
+        .map(|(rank, i)| (before.threads[i].id.as_str(), rank))
+        .collect();
+    change.deleted.sort_by_key(|row| match row.kind.as_str() {
+        "organization" => (0, 0),
+        "project" => (1, 0),
+        "thread" => (2, thread_order[row.id.as_str()]),
+        "todo" => (3, 0),
+        "entry" => (4, 0),
+        _ => unreachable!(),
+    });
     for deleted in change.deleted.iter().rev() {
         let table = match deleted.kind.as_str() {
             "organization" => "organizations",
@@ -224,7 +267,11 @@ pub fn transact(
     }
     upsert(&tx, "organizations", &change.organizations).context("保存组织失败")?;
     upsert(&tx, "projects", &change.projects).context("保存项目失败")?;
-    upsert(&tx, "threads", &change.threads).context("保存策略线失败")?;
+    let threads: Vec<_> = parent_first(&change.threads)?
+        .into_iter()
+        .map(|i| change.threads[i].clone())
+        .collect();
+    upsert(&tx, "threads", &threads).context("保存策略线失败")?;
     upsert(&tx, "todos", &change.todos).context("保存待办失败")?;
     upsert(&tx, "entries", &change.entries).context("保存条目失败")?;
     if let Some(settings) = &change.settings {
@@ -332,14 +379,87 @@ fn next(positions: impl Iterator<Item = i64>) -> i64 {
 fn id() -> String {
     Uuid::new_v4().to_string()
 }
+
+// Iterative traversal keeps nesting independent of the Rust call-stack depth.
+fn parent_first(threads: &[Thread]) -> Result<Vec<usize>> {
+    let ids: HashMap<_, _> = threads
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.as_str(), i))
+        .collect();
+    let mut children = vec![Vec::new(); threads.len()];
+    let mut order = Vec::new();
+    for (i, thread) in threads.iter().enumerate() {
+        if let Some(parent) = thread.parent_id.as_deref().and_then(|id| ids.get(id)) {
+            children[*parent].push(i);
+        } else {
+            order.push(i);
+        }
+    }
+    let mut cursor = 0;
+    while cursor < order.len() {
+        order.extend_from_slice(&children[order[cursor]]);
+        cursor += 1;
+    }
+    ensure!(
+        order.len() == threads.len(),
+        "不能把策略线放到它自己或它的子策略线下面。"
+    );
+    Ok(order)
+}
+
+fn subtree(w: &Workspace, id: &str) -> HashSet<String> {
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for row in &w.threads {
+        if let Some(parent) = row.parent_id.as_deref() {
+            children.entry(parent).or_default().push(&row.id);
+        }
+    }
+    let mut pending = vec![id];
+    let mut found = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if found.insert(id.to_owned()) {
+            if let Some(children) = children.get(id) {
+                pending.extend(children);
+            }
+        }
+    }
+    found
+}
+
+fn validate_parent(
+    threads: &[Thread],
+    id: &str,
+    project: &str,
+    parent: Option<&str>,
+) -> Result<()> {
+    let by_id: HashMap<_, _> = threads.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut cursor = parent;
+    let mut seen = HashSet::from([id]);
+    while let Some(id) = cursor {
+        let row = by_id.get(id).context("找不到上级策略线，可能已被删除。")?;
+        ensure!(
+            seen.insert(id),
+            "不能把策略线放到它自己或它的子策略线下面。"
+        );
+        ensure!(row.project_id == project, "上级策略线必须在同一个项目里。");
+        cursor = row.parent_id.as_deref();
+    }
+    Ok(())
+}
+
 fn touch(w: &mut Workspace, thread_id: &str, now: i64) -> Result<Change> {
-    let row = index(&w.threads, thread_id, "策略线")?;
-    w.threads[row].updated_at = now;
-    w.threads[row].last_activity_at = now;
-    Ok(Change {
-        threads: vec![w.threads[row].clone()],
-        ..Change::default()
-    })
+    let mut change = Change::default();
+    let mut cursor = Some(thread_id.to_owned());
+    while let Some(id) = cursor {
+        let row = index(&w.threads, &id, "策略线")?;
+        let row = &mut w.threads[row];
+        row.updated_at = now;
+        row.last_activity_at = now;
+        cursor = row.parent_id.clone();
+        change.threads.push(row.clone());
+    }
+    Ok(change)
 }
 fn event(
     w: &mut Workspace,
@@ -347,7 +467,7 @@ fn event(
     thread_id: Option<&str>,
     field: &str,
     from: Option<&str>,
-    to: &str,
+    to: Option<&str>,
     now: i64,
 ) {
     w.entries.push(Entry {
@@ -360,7 +480,7 @@ fn event(
         event: Some(EntryEvent {
             field: field.into(),
             from: from.map(str::to_owned),
-            to: Some(to.to_owned()),
+            to: to.map(str::to_owned),
         }),
         created_at: now,
         edited_at: None,
@@ -387,6 +507,7 @@ pub fn create_organization(
         )?,
         note: text(input.note.as_deref().unwrap_or(""), "组织备注", 2000, false)?,
         archived: false,
+        demo: false,
         position: next(w.organizations.iter().map(|r| r.position)),
         created_at: now,
         updated_at: now,
@@ -500,7 +621,7 @@ pub fn update_project(
             None,
             "health",
             Some(&old.health),
-            &row.health,
+            Some(&row.health),
             now,
         );
     }
@@ -511,7 +632,7 @@ pub fn update_project(
             None,
             "status",
             Some(&old.status),
-            &row.status,
+            Some(&row.status),
             now,
         );
     }
@@ -525,6 +646,8 @@ pub fn update_project(
 pub fn create_thread(w: &mut Workspace, input: ThreadInput, now: i64) -> Result<Change> {
     let project_id = input.project_id.trim().to_owned();
     index(&w.projects, &project_id, "项目")?;
+    let parent_id = input.parent_id.map(|id| id.trim().to_owned());
+    validate_parent(&w.threads, "", &project_id, parent_id.as_deref())?;
     let state = choice(
         input.state.as_deref().unwrap_or("active"),
         "策略线状态",
@@ -535,10 +658,11 @@ pub fn create_thread(w: &mut Workspace, input: ThreadInput, now: i64) -> Result<
         position: next(
             w.threads
                 .iter()
-                .filter(|t| t.project_id == project_id)
+                .filter(|t| t.project_id == project_id && t.parent_id == parent_id)
                 .map(|t| t.position),
         ),
         project_id,
+        parent_id,
         title: text(&input.title, "策略线标题", 120, true)?,
         summary: text(
             input.summary.as_deref().unwrap_or(""),
@@ -576,7 +700,7 @@ pub fn create_thread(w: &mut Workspace, input: ThreadInput, now: i64) -> Result<
         Some(&row.id),
         "created",
         None,
-        &row.stage,
+        Some(&row.stage),
         now,
     );
     let thread_id = row.id.clone();
@@ -585,14 +709,14 @@ pub fn create_thread(w: &mut Workspace, input: ThreadInput, now: i64) -> Result<
         create_todo(
             w,
             TodoInput {
-                thread_id,
+                thread_id: thread_id.clone(),
                 text: next_action,
                 due: None,
             },
             now,
         )?;
     }
-    Ok(Change::default())
+    touch(w, &thread_id, now)
 }
 
 pub fn update_thread(w: &mut Workspace, id: &str, patch: ThreadPatch, now: i64) -> Result<Change> {
@@ -612,15 +736,27 @@ pub fn update_thread(w: &mut Workspace, id: &str, patch: ThreadPatch, now: i64) 
     if let Some(v) = patch.project_id {
         let v = v.trim().to_owned();
         index(&w.projects, &v, "项目")?;
-        if v != row.project_id {
-            row.position = next(
-                w.threads
-                    .iter()
-                    .filter(|t| t.project_id == v)
-                    .map(|t| t.position),
-            );
-            row.project_id = v;
-        }
+        row.project_id = v;
+    }
+    if let Some(parent) = patch.parent_id {
+        row.parent_id = parent.map(|id| id.trim().to_owned());
+    } else if row.project_id != old.project_id {
+        row.parent_id = None;
+    }
+    validate_parent(
+        &w.threads,
+        &row.id,
+        &row.project_id,
+        row.parent_id.as_deref(),
+    )?;
+    let activity = activity || row.parent_id != old.parent_id;
+    if row.project_id != old.project_id || row.parent_id != old.parent_id {
+        row.position = next(
+            w.threads
+                .iter()
+                .filter(|t| t.project_id == row.project_id && t.parent_id == row.parent_id)
+                .map(|t| t.position),
+        );
     }
     if let Some(v) = patch.title {
         row.title = text(&v, "策略线标题", 120, true)?;
@@ -668,13 +804,18 @@ pub fn update_thread(w: &mut Workspace, id: &str, patch: ThreadPatch, now: i64) 
     if patch.reviewed == Some(true) {
         row.reviewed_at = Some(now);
     }
-    if activity {
-        row.updated_at = now;
-        row.last_activity_at = now;
-    }
-    if row.project_id != old.project_id {
+    let moved = if row.project_id != old.project_id {
+        subtree(w, &row.id)
+    } else {
+        HashSet::new()
+    };
+    if !moved.is_empty() {
         for entry in &mut w.entries {
-            if entry.thread_id.as_deref() == Some(&row.id) {
+            if entry
+                .thread_id
+                .as_ref()
+                .is_some_and(|id| moved.contains(id))
+            {
                 entry.project_id.clone_from(&row.project_id);
             }
         }
@@ -686,7 +827,7 @@ pub fn update_thread(w: &mut Workspace, id: &str, patch: ThreadPatch, now: i64) 
             Some(&row.id),
             "stage",
             Some(&old.stage),
-            &row.stage,
+            Some(&row.stage),
             now,
         );
     }
@@ -697,7 +838,7 @@ pub fn update_thread(w: &mut Workspace, id: &str, patch: ThreadPatch, now: i64) 
             Some(&row.id),
             "state",
             Some(&old.state),
-            &row.state,
+            Some(&row.state),
             now,
         );
     }
@@ -714,13 +855,55 @@ pub fn update_thread(w: &mut Workspace, id: &str, patch: ThreadPatch, now: i64) 
             Some(&row.id),
             "project",
             Some(&from),
-            &to,
+            Some(&to),
+            now,
+        );
+        let descendants: Vec<_> = w
+            .threads
+            .iter_mut()
+            .filter(|t| t.id != row.id && moved.contains(&t.id))
+            .map(|t| {
+                t.project_id.clone_from(&row.project_id);
+                t.updated_at = now;
+                t.id.clone()
+            })
+            .collect();
+        for id in descendants {
+            event(
+                w,
+                &row.project_id,
+                Some(&id),
+                "project",
+                Some(&from),
+                Some(&to),
+                now,
+            );
+        }
+    }
+    if row.parent_id != old.parent_id {
+        let title = |id: &Option<String>| -> Option<String> {
+            id.as_ref()
+                .and_then(|id| w.threads.iter().find(|t| &t.id == id))
+                .map(|t| t.title.clone())
+        };
+        let from = title(&old.parent_id);
+        let to = title(&row.parent_id);
+        event(
+            w,
+            &row.project_id,
+            Some(&row.id),
+            "parent",
+            from.as_deref(),
+            to.as_deref(),
             now,
         );
     }
     w.threads[i] = row.clone();
+    if activity {
+        return touch(w, &row.id, now);
+    }
     Ok(Change {
-        threads: if activity || patch.reviewed == Some(true) {
+        threads: if patch.reviewed == Some(true) {
             vec![row]
         } else {
             Vec::new()
@@ -862,7 +1045,12 @@ pub fn delete(w: &mut Workspace, kind: &str, id: &str, now: i64) -> Result<Chang
         }
         "thread" => {
             let i = index(&w.threads, id, "策略线")?;
-            w.threads.remove(i);
+            let parent = w.threads[i].parent_id.clone();
+            let removed = subtree(w, id);
+            w.threads.retain(|r| !removed.contains(&r.id));
+            if let Some(parent) = parent {
+                change = touch(w, &parent, now)?;
+            }
         }
         "todo" => {
             let i = index(&w.todos, id, "待办")?;
@@ -890,6 +1078,358 @@ pub fn delete(w: &mut Workspace, kind: &str, id: &str, now: i64) -> Result<Chang
     Ok(change)
 }
 
+// Imports validate with the normal field rules, but must never normalize supplied history.
+fn unchanged<T: PartialEq>(original: &T, validated: T, label: &str) -> Result<()> {
+    ensure!(
+        original == &validated,
+        "示例数据的{label}格式不规范，请先整理后再导入。"
+    );
+    Ok(())
+}
+
+fn demo_time(value: i64, now: i64) -> Result<()> {
+    ensure!(
+        value <= now.saturating_add(300_000),
+        "示例数据时间戳不能晚于当前时间 5 分钟以上。"
+    );
+    Ok(())
+}
+
+fn demo_times(created: i64, updated: i64, now: i64) -> Result<()> {
+    demo_time(created, now)?;
+    demo_time(updated, now)?;
+    ensure!(
+        updated >= created,
+        "示例数据的 updatedAt 不能早于 createdAt。"
+    );
+    Ok(())
+}
+
+fn demo_event(row: &Entry) -> Result<()> {
+    ensure!(
+        row.body.is_empty() && row.health.is_none(),
+        "示例事件条目的正文必须为空且健康度必须为 null。"
+    );
+    let event = row.event.as_ref().context("示例事件条目缺少 event。")?;
+    let valid = match event.field.as_str() {
+        "created" => {
+            row.thread_id.is_some()
+                && event.from.is_none()
+                && event.to.as_deref().is_some_and(|v| STAGES.contains(&v))
+        }
+        "stage" | "state" => {
+            let allowed = if event.field == "stage" {
+                STAGES
+            } else {
+                STATES
+            };
+            row.thread_id.is_some()
+                && event.from.as_deref().is_some_and(|v| allowed.contains(&v))
+                && event.to.as_deref().is_some_and(|v| allowed.contains(&v))
+        }
+        "project" => {
+            row.thread_id.is_some()
+                && event
+                    .from
+                    .as_deref()
+                    .zip(event.to.as_deref())
+                    .is_some_and(|(from, to)| {
+                        [from, to]
+                            .iter()
+                            .all(|v| !v.is_empty() && *v == v.trim() && v.chars().count() <= 80)
+                    })
+        }
+        "parent" => {
+            row.thread_id.is_some()
+                && (event.from.is_some() || event.to.is_some())
+                && [event.from.as_deref(), event.to.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .all(|v| !v.is_empty() && v == v.trim() && v.chars().count() <= 120)
+        }
+        "health" | "status" => {
+            let allowed = if event.field == "health" {
+                HEALTH
+            } else {
+                STATUSES
+            };
+            row.thread_id.is_none()
+                && event.from.as_deref().is_some_and(|v| allowed.contains(&v))
+                && event.to.as_deref().is_some_and(|v| allowed.contains(&v))
+        }
+        _ => false,
+    };
+    ensure!(valid, "示例事件内容无效。");
+    Ok(())
+}
+
+pub fn import_demo_data(w: &mut Workspace, mut seed: DemoSeed, now: i64) -> Result<Change> {
+    ensure!(
+        !w.organizations.iter().any(|r| r.demo),
+        "示例数据已经添加过了，先清理再重新添加。"
+    );
+    for (count, limit, label) in [
+        (seed.organizations.len(), 20, "组织"),
+        (seed.projects.len(), 100, "项目"),
+        (seed.threads.len(), 500, "策略线"),
+        (seed.todos.len(), 2000, "待办"),
+        (seed.entries.len(), 5000, "条目"),
+    ] {
+        ensure!(count <= limit, "示例数据的{label}不能超过 {limit} 行。");
+    }
+    let mut ids: HashSet<&str> = w
+        .organizations
+        .iter()
+        .map(Record::id)
+        .chain(w.projects.iter().map(Record::id))
+        .chain(w.threads.iter().map(Record::id))
+        .chain(w.todos.iter().map(Record::id))
+        .chain(w.entries.iter().map(Record::id))
+        .collect();
+    for id in seed
+        .organizations
+        .iter()
+        .map(Record::id)
+        .chain(seed.projects.iter().map(Record::id))
+        .chain(seed.threads.iter().map(Record::id))
+        .chain(seed.todos.iter().map(Record::id))
+        .chain(seed.entries.iter().map(Record::id))
+    {
+        ensure!(
+            !id.is_empty() && id == id.trim(),
+            "示例数据的 id 不能为空或包含首尾空白。"
+        );
+        ensure!(ids.insert(id), "示例数据的 id 重复或与已有记录冲突。");
+    }
+    let organizations: HashSet<_> = seed.organizations.iter().map(|r| &r.id).collect();
+    let projects: HashSet<_> = seed.projects.iter().map(|r| &r.id).collect();
+    let threads: HashMap<_, _> = seed
+        .threads
+        .iter()
+        .map(|r| (&r.id, &r.project_id))
+        .collect();
+    for row in &seed.organizations {
+        unchanged(
+            &row.name,
+            text(&row.name, "组织名称", 60, true)?,
+            "组织名称",
+        )?;
+        unchanged(&row.code, code(&row.code, &row.name)?, "组织简称")?;
+        unchanged(
+            &row.color,
+            choice(&row.color, "组织颜色", COLORS)?,
+            "组织颜色",
+        )?;
+        unchanged(
+            &row.note,
+            text(&row.note, "组织备注", 2000, false)?,
+            "组织备注",
+        )?;
+        demo_times(row.created_at, row.updated_at, now)?;
+    }
+    for row in &seed.projects {
+        ensure!(
+            organizations.contains(&row.org_id),
+            "示例项目必须引用本次导入的组织。"
+        );
+        unchanged(
+            &row.name,
+            text(&row.name, "项目名称", 80, true)?,
+            "项目名称",
+        )?;
+        unchanged(
+            &row.goal,
+            text(&row.goal, "项目目标", 2000, false)?,
+            "项目目标",
+        )?;
+        unchanged(
+            &row.status,
+            choice(&row.status, "项目状态", STATUSES)?,
+            "项目状态",
+        )?;
+        unchanged(
+            &row.health,
+            choice(&row.health, "项目健康度", HEALTH)?,
+            "项目健康度",
+        )?;
+        unchanged(&row.target_date, date(row.target_date.clone())?, "目标日期")?;
+        demo_times(row.created_at, row.updated_at, now)?;
+    }
+    for row in &seed.threads {
+        ensure!(
+            projects.contains(&row.project_id),
+            "示例策略线必须引用本次导入的项目。"
+        );
+        validate_parent(
+            &seed.threads,
+            &row.id,
+            &row.project_id,
+            row.parent_id.as_deref(),
+        )?;
+        unchanged(
+            &row.title,
+            text(&row.title, "策略线标题", 120, true)?,
+            "策略线标题",
+        )?;
+        unchanged(
+            &row.summary,
+            text(&row.summary, "策略线摘要", 20000, false)?,
+            "策略线摘要",
+        )?;
+        unchanged(
+            &row.stage,
+            choice(&row.stage, "研发阶段", STAGES)?,
+            "研发阶段",
+        )?;
+        unchanged(
+            &row.state,
+            choice(&row.state, "策略线状态", STATES)?,
+            "策略线状态",
+        )?;
+        unchanged(
+            &row.priority,
+            choice(&row.priority, "优先级", PRIORITIES)?,
+            "优先级",
+        )?;
+        ensure!(
+            (0..=100).contains(&row.hill),
+            "山丘位置必须是 0–100 的整数。"
+        );
+        unchanged(
+            &row.waiting_on,
+            text(&row.waiting_on, "等待事项", 80, false)?,
+            "等待事项",
+        )?;
+        unchanged(&row.tags, tags(row.tags.clone())?, "标签")?;
+        unchanged(&row.metrics, metrics(row.metrics.clone())?, "指标")?;
+        ensure!(
+            (row.state == "waiting") == row.waiting_since.is_some(),
+            "示例策略线的 waiting 与 waitingSince 不一致。"
+        );
+        ensure!(
+            (row.state == "closed") == row.closed_at.is_some(),
+            "示例策略线的 closed 与 closedAt 不一致。"
+        );
+        demo_times(row.created_at, row.updated_at, now)?;
+        ensure!(
+            row.last_activity_at >= row.created_at,
+            "示例数据的 lastActivityAt 不能早于 createdAt。"
+        );
+        for time in [
+            Some(row.last_activity_at),
+            row.waiting_since,
+            row.reviewed_at,
+            row.closed_at,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            demo_time(time, now)?;
+        }
+    }
+    for row in &seed.todos {
+        ensure!(
+            threads.contains_key(&row.thread_id),
+            "示例待办必须引用本次导入的策略线。"
+        );
+        unchanged(
+            &row.text,
+            text(&row.text, "待办内容", 500, true)?,
+            "待办内容",
+        )?;
+        unchanged(&row.due, date(row.due.clone())?, "待办日期")?;
+        ensure!(
+            row.done == row.done_at.is_some(),
+            "示例待办的 done 与 doneAt 不一致。"
+        );
+        demo_times(row.created_at, row.updated_at, now)?;
+        if let Some(time) = row.done_at {
+            demo_time(time, now)?;
+        }
+    }
+    for row in &seed.entries {
+        ensure!(
+            projects.contains(&row.project_id),
+            "示例条目必须引用本次导入的项目。"
+        );
+        if let Some(id) = &row.thread_id {
+            ensure!(
+                threads.get(id) == Some(&&row.project_id),
+                "示例条目的策略线必须属于本次导入的同一项目。"
+            );
+        }
+        unchanged(
+            &row.kind,
+            choice(
+                &row.kind,
+                "条目类型",
+                &["note", "decision", "result", "update", "event"],
+            )?,
+            "条目类型",
+        )?;
+        if row.kind == "event" {
+            demo_event(row)?;
+        } else {
+            ensure!(row.event.is_none(), "非事件示例条目的 event 必须为 null。");
+            unchanged(
+                &row.body,
+                text(&row.body, "条目正文", 20000, true)?,
+                "条目正文",
+            )?;
+            ensure!(
+                row.kind != "update" || row.thread_id.is_none(),
+                "项目进展条目不能属于策略线。"
+            );
+            ensure!(
+                row.health.is_none() || row.kind == "update",
+                "只有项目进展条目可以传入健康度。"
+            );
+            if let Some(health) = &row.health {
+                unchanged(health, choice(health, "项目健康度", HEALTH)?, "项目健康度")?;
+            }
+        }
+        demo_time(row.created_at, now)?;
+        if let Some(time) = row.edited_at {
+            demo_time(time, now)?;
+        }
+    }
+    if !seed.organizations.is_empty() {
+        let last = w
+            .organizations
+            .iter()
+            .map(|r| r.position)
+            .max()
+            .unwrap_or(-1);
+        ensure!(
+            last.checked_add(seed.organizations.len() as i64).is_some(),
+            "组织位置超出可用范围，无法添加示例数据。"
+        );
+        for (offset, row) in seed.organizations.iter_mut().enumerate() {
+            row.demo = true;
+            row.position = last + 1 + offset as i64;
+        }
+    }
+    w.organizations.extend(seed.organizations);
+    w.projects.extend(seed.projects);
+    w.threads.extend(seed.threads);
+    w.todos.extend(seed.todos);
+    w.entries.extend(seed.entries);
+    Ok(Change::default())
+}
+
+pub fn clear_demo_data(w: &mut Workspace, now: i64) -> Result<Change> {
+    let ids: Vec<_> = w
+        .organizations
+        .iter()
+        .filter(|r| r.demo)
+        .map(|r| r.id.clone())
+        .collect();
+    for id in ids {
+        delete(w, "organization", &id, now)?;
+    }
+    Ok(Change::default())
+}
+
 pub fn reorder(w: &mut Workspace, kind: &str, ids: Vec<String>, now: i64) -> Result<Change> {
     let ids: Vec<_> = ids.iter().map(|s| s.trim().to_owned()).collect();
     let unique: HashSet<_> = ids.iter().collect();
@@ -905,7 +1445,7 @@ pub fn reorder(w: &mut Workspace, kind: &str, ids: Vec<String>, now: i64) -> Res
                 return Ok(change);
             }
             let first = index(&w.$rows, &ids[0], $label)?;
-            let parent: String = ($parent)(&w.$rows[first]);
+            let parent = ($parent)(&w.$rows[first]);
             let expected: HashSet<_> = w
                 .$rows
                 .iter()
@@ -929,14 +1469,14 @@ pub fn reorder(w: &mut Workspace, kind: &str, ids: Vec<String>, now: i64) -> Res
         "organization" => order!(organizations, "组织", |_: &Organization| String::new()),
         "project" => order!(projects, "项目", |r: &Project| r.org_id.clone()),
         "thread" => {
-            order!(threads, "策略线", |r: &Thread| r.project_id.clone());
+            order!(threads, "策略线", |r: &Thread| (
+                r.project_id.clone(),
+                r.parent_id.clone()
+            ));
+            change.threads.clear();
             for id in &ids {
-                touch(w, id, now)?;
+                merge(&mut change.threads, touch(w, id, now)?.threads);
             }
-            change.threads = ids
-                .iter()
-                .map(|id| w.threads[index(&w.threads, id, "策略线").expect("validated")].clone())
-                .collect();
         }
         "todo" => {
             order!(todos, "待办", |r: &Todo| r.thread_id.clone());

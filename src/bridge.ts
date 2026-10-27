@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
-  Change, EntityKind, EntryInput, EntryPatch, Id, OrganizationInput, OrganizationPatch, ProjectInput, ProjectPatch,
+  Change, DemoSeed, EntityKind, EntryInput, EntryPatch, Id, OrganizationInput, OrganizationPatch, ProjectInput, ProjectPatch,
   SettingsPatch, ThreadInput, ThreadPatch, TodoInput, TodoPatch, Workspace,
 } from './types';
 
@@ -26,6 +26,8 @@ export interface Api {
   reorder(kind: Exclude<EntityKind, 'entry'>, ids: Id[]): Promise<Change>;
   updateSettings(patch: SettingsPatch): Promise<Change>;
   backupNow(): Promise<string>;
+  importDemoData(seed: DemoSeed): Promise<Change>;
+  clearDemoData(): Promise<Change>;
 }
 
 const desktopApi: Api = {
@@ -48,6 +50,8 @@ const desktopApi: Api = {
   reorder: (kind, ids) => invoke('reorder', { kind, ids }),
   updateSettings: patch => invoke('update_settings', { patch }),
   backupNow: () => invoke('backup_now'),
+  importDemoData: seed => invoke('import_demo_data', { seed }),
+  clearDemoData: () => invoke('clear_demo_data'),
 };
 
 /** Desktop builds talk to the Rust store; the browser preview runs an in-memory demo with the same rules. */

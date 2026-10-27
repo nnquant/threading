@@ -27,6 +27,8 @@ export interface Organization {
   color: OrgColor;
   note: string;
   archived: boolean;
+  /** Added by `import_demo_data`; `clear_demo_data` removes it with everything under it. */
+  demo: boolean;
   position: number;
   createdAt: Millis;
   updatedAt: Millis;
@@ -47,10 +49,12 @@ export interface Project {
 
 export interface Metric { label: string; value: string }
 
-/** A strategy line: one parallel line of work inside a project. */
+/** A strategy line: one parallel line of work inside a project. Lines nest: a sub-line lives in its parent's project. */
 export interface Thread {
   id: Id;
   projectId: Id;
+  /** The line this one branched from, or null for a top-level line of the project. Any depth, never a cycle. */
+  parentId: Id | null;
   title: string;
   /** Markdown: hypothesis, scope, links. */
   summary: string;
@@ -66,7 +70,7 @@ export interface Thread {
   position: number;
   createdAt: Millis;
   updatedAt: Millis;
-  /** Last real work on the line: its own edits, its todos or its entries. Reviews do not count. */
+  /** Last real work on the line or any of its sub-lines: edits, todos or entries. Reviews do not count. */
   lastActivityAt: Millis;
   reviewedAt: Millis | null;
   closedAt: Millis | null;
@@ -85,7 +89,7 @@ export interface Todo {
   updatedAt: Millis;
 }
 
-export type EventField = 'created' | 'stage' | 'state' | 'project' | 'health' | 'status';
+export type EventField = 'created' | 'stage' | 'state' | 'project' | 'parent' | 'health' | 'status';
 export interface EntryEvent { field: EventField; from: string | null; to: string | null }
 
 /** A timeline entry. `threadId` null means a project-level entry. */
@@ -138,6 +142,8 @@ export interface ProjectPatch { orgId?: Id; name?: string; goal?: string; status
 
 export interface ThreadInput {
   projectId: Id;
+  /** Creates a sub-line; the parent must be in `projectId`. */
+  parentId?: Id | null;
   title: string;
   summary?: string;
   stage?: Stage;
@@ -148,7 +154,10 @@ export interface ThreadInput {
   nextAction?: string;
 }
 export interface ThreadPatch {
+  /** Moves the line with all its sub-lines; it lands under `parentId` when given, otherwise at the top level. */
   projectId?: Id;
+  /** `null` makes it a top-level line. The parent must be in the same project and outside this line's own subtree. */
+  parentId?: Id | null;
   title?: string;
   summary?: string;
   stage?: Stage;
@@ -169,3 +178,12 @@ export interface EntryInput { projectId: Id; threadId?: Id | null; kind: Exclude
 export interface EntryPatch { body: string }
 
 export interface SettingsPatch { staleDays?: number; wipLimit?: number }
+
+/** Demo rows built by the frontend, stored as given (ids and timestamps included) so they arrive with history. */
+export interface DemoSeed {
+  organizations: Organization[];
+  projects: Project[];
+  threads: Thread[];
+  todos: Todo[];
+  entries: Entry[];
+}

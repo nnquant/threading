@@ -28,7 +28,7 @@ describe('Threading', () => {
     expect(within(section('需要关注的项目')).getByText('中证 1000 指数增强')).toBeTruthy();
     const nav = screen.getByRole('navigation', { name: '导航' });
     expect(within(nav).getByText('澜湾资产')).toBeTruthy();
-    expect(within(nav).getByRole('button', { name: /周回顾\s*9/ })).toBeTruthy();
+    expect(within(nav).getByRole('button', { name: /周回顾\s*13/ })).toBeTruthy();
   });
 
   it('completes a next step from focus and can undo it', async () => {

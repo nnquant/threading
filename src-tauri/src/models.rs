@@ -18,6 +18,7 @@ pub struct Organization {
     pub color: String,
     pub note: String,
     pub archived: bool,
+    pub demo: bool,
     pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -50,6 +51,7 @@ pub struct Metric {
 pub struct Thread {
     pub id: String,
     pub project_id: String,
+    pub parent_id: Option<String>,
     pub title: String,
     pub summary: String,
     pub stage: String,
@@ -123,6 +125,16 @@ pub struct Workspace {
     pub data_path: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DemoSeed {
+    pub organizations: Vec<Organization>,
+    pub projects: Vec<Project>,
+    pub threads: Vec<Thread>,
+    pub todos: Vec<Todo>,
+    pub entries: Vec<Entry>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Deleted {
     pub kind: String,
@@ -194,6 +206,7 @@ pub struct ProjectPatch {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadInput {
     pub project_id: String,
+    pub parent_id: Option<String>,
     pub title: String,
     pub summary: Option<String>,
     pub stage: Option<String>,
@@ -207,6 +220,8 @@ pub struct ThreadInput {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadPatch {
     pub project_id: Option<String>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub parent_id: Option<Option<String>>,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub stage: Option<String>,
