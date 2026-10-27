@@ -31,10 +31,10 @@ Threading 是使用 **Rust + Tauri 2 + React** 构建的本地桌面工具，按
 
 ### Windows x64
 
-在 [Releases](https://github.com/nnquant/threading/releases/latest) 下载 **0.1.0** 版：
+在 [Releases](https://github.com/nnquant/threading/releases/latest) 下载 **0.2.0** 版：
 
-- **安装版**：下载 `Threading_0.1.0_x64-setup.exe`，运行安装程序。
-- **便携版**：下载 `Threading_0.1.0_windows_x64_portable.zip`，解压后运行 `Threading.exe`，请保留同包的 `LICENSE`。
+- **安装版**：下载 `Threading_0.2.0_x64-setup.exe`，运行安装程序。
+- **便携版**：下载 `Threading_0.2.0_windows_x64_portable.zip`，解压后运行 `Threading.exe`，请保留同包的 `LICENSE`。
 
 运行需要 Windows 10/11 和 Microsoft Edge WebView2 Runtime。应用未进行代码签名，首次运行时 Windows 可能提示来自未知发布者。安装版和便携版读写同一个数据目录（见下文「数据」）。
 

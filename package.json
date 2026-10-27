@@ -1,6 +1,6 @@
 {
   "name": "threading",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A focused desktop tracker for parallel strategy lines across organizations and projects, built with Rust and Tauri",
   "license": "MIT",
